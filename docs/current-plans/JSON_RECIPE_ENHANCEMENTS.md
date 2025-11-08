@@ -10,6 +10,7 @@
 - Phase 1 focuses on parsing JSON recipe descriptions and optional start/end times at the CLI boundary.
 - Phase 2 rewires pipeline output to trim input audio to the requested range, apply recipes per chunk, and emit each chunk as an individual WAV under the requested output directory.
 - Phase 3 ensures time-stretching preserves tail audio by compensating for stretcher latency, flushing remaining samples, and verifying that recipe steps always reuse the original chunk.
+- Recipe format updated to express silence explicitly (`silent: true` steps) instead of implicit `add_silence_after` flag.
 - Deprecated scaffolding (`Operation`, `ProcessingPlan`, chunk metadata) removed to keep the codebase lean and clippy-clean; runtime logging now exercises transcript text, granularity, and boundary source segment data.
 - JSON structure must capture ordered steps including repeat counts, speed factors, and whether to add silence.
 - CLI should accept either inline JSON or a path flag (TBD during implementation) while validating structure.
@@ -93,4 +94,26 @@
 
 **Issues Encountered**
 - Signalsmith Stretch introduces equal input/output latency (~2646 samples). Without trimming those leading samples, fast outputs ended in silence. Resolved by padding output length, flushing the stretcher, and discarding the latency window before truncation.
+
+## Phase 4 – Documentation & Finalization Status
+- [x] **Planning Documentation**
+- [x] **Code Simplicity**
+- [x] **Code Modularity**
+- [x] **Scope Control**
+- [x] **No Dead Code**
+- [x] **No Fake Constructions**
+- [x] **Code Purpose**
+- [x] **Required Tests**
+
+**Deliverables**
+- Refreshed `ACTUAL_STATE.md` to capture JSON-configurable recipes, per-chunk output directories, trimming controls, latency fixes, new logging, and current test/clippy status.
+- Rewrote `CLAUDE.md` usage instructions to document JSON recipe input (`--recipe-json/--recipe-file`), per-chunk outputs, start/end trimming, and updated build/test counts.
+- Updated CLI documentation to note the removal of the legacy `--operations` flag and provide example JSON recipe usage.
+
+**Tests**
+- `cargo clippy --all-targets --all-features` (2025-11-08): clean.
+- `cargo test` (2025-11-08): 34 passed, 1 ignored, 0 failed.
+
+**Issues Encountered**
+- None; documentation updates proceeded smoothly once the pipeline refactor was in place.
 

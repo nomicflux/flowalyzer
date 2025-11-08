@@ -12,9 +12,9 @@ use crate::types::{AudioChunk, Recipe};
 /// Apply a recipe (sequence of operations) to a single audio chunk
 ///
 /// For each step in the recipe:
-/// 1. Apply speed change to the original chunk
-/// 2. Repeat the speed-adjusted chunk N times
-/// 3. Optionally add silence (duration = speed-adjusted chunk length)
+/// 1. Compute a speed-adjusted view of the original chunk
+/// 2. If `silent` is false, repeat that audio `repeat_count` times
+/// 3. If `silent` is true, emit `repeat_count` silence chunks matching the adjusted duration
 ///
 /// # Arguments
 /// * `chunk` - The audio chunk to process
@@ -28,40 +28,34 @@ use crate::types::{AudioChunk, Recipe};
 /// use flowalyzer::types::{AudioChunk, Recipe};
 /// use flowalyzer::operations::recipe::apply_recipe;
 ///
-/// let chunk = AudioChunk {
-///     samples: vec![1.0, 0.5, 0.0, -0.5, -1.0],
-///     sample_rate: 44100,
-///     start_time: 0.0,
-///     end_time: 0.1,
-/// };
-///
-/// let recipe = Recipe::new("language-learning")
+/// let chunk = AudioChunk { /* ... */ };
+/// let recipe = Recipe::new("example")
 ///     .add_step(RecipeStep {
 ///         repeat_count: 3,
-///         speed_factor: 0.5,
-///         add_silence_after: true,
+///         speed_factor: 0.75,
+///         silent: false,
+///     })
+///     .add_step(RecipeStep {
+///         repeat_count: 1,
+///         speed_factor: 0.75,
+///         silent: true,
 ///     });
 /// let results = apply_recipe(&chunk, &recipe);
-///
-/// // Language learning: (3 slow + silence) + (3 normal + silence) + (3 fast + silence) = 12 chunks
-/// assert_eq!(results.len(), 12);
+/// assert_eq!(results.len(), 4);
 /// ```
 pub fn apply_recipe(chunk: &AudioChunk, recipe: &Recipe) -> Vec<AudioChunk> {
     let mut results = Vec::new();
 
     for step in &recipe.steps {
-        // 1. Apply speed change to original chunk
         let speed_adjusted = change_speed(chunk, step.speed_factor);
-
-        // 2. Repeat the speed-adjusted chunk N times
-        let repeated = repeat_chunk(&speed_adjusted, step.repeat_count);
-        results.extend(repeated);
-
-        // 3. Add silence if requested (duration = speed-adjusted chunk length)
-        if step.add_silence_after {
+        if step.silent {
             let silence_duration = speed_adjusted.end_time - speed_adjusted.start_time;
-            let silence = insert_silence(silence_duration, speed_adjusted.sample_rate);
-            results.push(silence);
+            for _ in 0..step.repeat_count {
+                results.push(insert_silence(silence_duration, speed_adjusted.sample_rate));
+            }
+        } else {
+            let repeated = repeat_chunk(&speed_adjusted, step.repeat_count);
+            results.extend(repeated);
         }
     }
 
@@ -110,7 +104,7 @@ mod tests {
         recipe = recipe.add_step(RecipeStep {
             repeat_count: 2,
             speed_factor: 1.0,
-            add_silence_after: false,
+            silent: false,
         });
 
         let results = apply_recipe(&chunk, &recipe);
@@ -129,24 +123,21 @@ mod tests {
         let chunk = create_test_chunk();
         let mut recipe = Recipe::new("with-silence");
         recipe = recipe.add_step(RecipeStep {
-            repeat_count: 1,
+            repeat_count: 2,
             speed_factor: 1.0,
-            add_silence_after: true,
+            silent: true,
         });
 
         let results = apply_recipe(&chunk, &recipe);
 
-        // Should have 2 chunks (1 repeat + 1 silence)
         assert_eq!(results.len(), 2);
-
-        // First chunk should be audio
-        assert!(!results[0].samples.is_empty());
-
-        // Second chunk should be silence (all zeros)
-        assert!(results[1].samples.iter().all(|&s| s == 0.0));
-
-        // Silence duration should match audio duration (both at speed 1.0)
-        assert!((results[0].samples.len() as i32 - results[1].samples.len() as i32).abs() < 100);
+        assert!(results
+            .iter()
+            .all(|chunk| chunk.samples.iter().all(|&s| s == 0.0)));
+        let expected_len = change_speed(&chunk, 1.0).samples.len();
+        assert!(results
+            .iter()
+            .all(|silence| silence.samples.len() == expected_len));
     }
 
     #[test]
@@ -156,17 +147,32 @@ mod tests {
             .add_step(RecipeStep {
                 repeat_count: 3,
                 speed_factor: 0.5,
-                add_silence_after: true,
+                silent: false,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 1,
+                speed_factor: 0.5,
+                silent: true,
             })
             .add_step(RecipeStep {
                 repeat_count: 3,
                 speed_factor: 1.0,
-                add_silence_after: true,
+                silent: false,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.0,
+                silent: true,
             })
             .add_step(RecipeStep {
                 repeat_count: 3,
                 speed_factor: 1.5,
-                add_silence_after: true,
+                silent: false,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.5,
+                silent: true,
             });
 
         let results = apply_recipe(&chunk, &recipe);
@@ -219,20 +225,22 @@ mod tests {
         let mut recipe = Recipe::new("test");
         recipe = recipe.add_step(RecipeStep {
             repeat_count: 1,
-            speed_factor: 0.5, // Slow = 2 seconds
-            add_silence_after: true,
+            speed_factor: 0.5,
+            silent: true,
         });
 
         let results = apply_recipe(&chunk, &recipe);
 
-        assert_eq!(results.len(), 2); // 1 audio + 1 silence
-
-        // Silence should be same length as slow audio (both ~2 seconds)
-        let audio_len = results[0].samples.len();
-        let silence_len = results[1].samples.len();
+        assert_eq!(results.len(), 1); // one silence chunk
 
         assert!(
-            (audio_len as i32 - silence_len as i32).abs() < 100,
+            results[0].samples.iter().all(|&s| s == 0.0),
+            "Silence chunk should be silent"
+        );
+        let expected_len = change_speed(&chunk, 0.5).samples.len();
+        assert_eq!(
+            results[0].samples.len(),
+            expected_len,
             "Silence duration should match speed-adjusted chunk duration"
         );
     }
@@ -245,12 +253,12 @@ mod tests {
             .add_step(RecipeStep {
                 repeat_count: 2,
                 speed_factor: 0.5,
-                add_silence_after: false,
+                silent: false,
             })
             .add_step(RecipeStep {
                 repeat_count: 2,
                 speed_factor: 2.0,
-                add_silence_after: false,
+                silent: false,
             });
 
         let results = apply_recipe(&chunk, &recipe);
@@ -275,12 +283,12 @@ mod tests {
             .add_step(RecipeStep {
                 repeat_count: 1,
                 speed_factor: 0.75,
-                add_silence_after: false,
+                silent: false,
             })
             .add_step(RecipeStep {
                 repeat_count: 1,
                 speed_factor: 1.5,
-                add_silence_after: false,
+                silent: false,
             });
 
         let results = apply_recipe(&chunk, &recipe);

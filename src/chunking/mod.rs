@@ -26,16 +26,25 @@ pub fn calculate_chunk_boundaries(
                 current_segments.clear();
             }
 
-            // Split long segment into multiple chunks at target duration
-            let mut seg_start = segment.start_time;
-            while seg_start < segment.end_time {
-                let chunk_end = (seg_start + config.target_duration).min(segment.end_time);
+            let max_allowed = config.max_duration + config.max_overshoot;
+            if segment_duration <= max_allowed {
                 boundaries.push(ChunkBoundary {
-                    start_time: seg_start,
-                    end_time: chunk_end,
+                    start_time: segment.start_time,
+                    end_time: segment.end_time,
                     source_segment_ids: vec![idx],
                 });
-                seg_start = chunk_end;
+            } else {
+                // Split long segment into multiple chunks at target duration
+                let mut seg_start = segment.start_time;
+                while seg_start < segment.end_time {
+                    let chunk_end = (seg_start + config.target_duration).min(segment.end_time);
+                    boundaries.push(ChunkBoundary {
+                        start_time: seg_start,
+                        end_time: chunk_end,
+                        source_segment_ids: vec![idx],
+                    });
+                    seg_start = chunk_end;
+                }
             }
 
             current_start = segment.end_time;
@@ -48,14 +57,19 @@ pub fn calculate_chunk_boundaries(
 
         // If adding this segment would exceed max duration, finalize current chunk
         if !current_segments.is_empty() && potential_duration > config.max_duration {
-            let last_seg_idx: usize = current_segments[current_segments.len() - 1];
-            boundaries.push(ChunkBoundary {
-                start_time: current_start,
-                end_time: transcript.segments[last_seg_idx].end_time,
-                source_segment_ids: current_segments.clone(),
-            });
-            current_segments.clear();
-            current_start = segment.start_time;
+            let max_allowed = config.max_duration + config.max_overshoot;
+            if potential_duration <= max_allowed {
+                // Allow a controlled overshoot to hit a natural boundary
+            } else {
+                let last_seg_idx: usize = current_segments[current_segments.len() - 1];
+                boundaries.push(ChunkBoundary {
+                    start_time: current_start,
+                    end_time: transcript.segments[last_seg_idx].end_time,
+                    source_segment_ids: current_segments.clone(),
+                });
+                current_segments.clear();
+                current_start = segment.start_time;
+            }
         }
 
         // Add this segment to current chunk
@@ -145,5 +159,69 @@ mod tests {
 
         // Should split into multiple chunks
         assert!(boundaries.len() > 1);
+    }
+
+    #[test]
+    fn test_allows_small_overshoot() {
+        let transcript = Transcript {
+            segments: vec![
+                Segment {
+                    text: "Phrase part one".to_string(),
+                    start_time: 0.0,
+                    end_time: 0.4,
+                    granularity: Granularity::Sentence,
+                },
+                Segment {
+                    text: "Phrase finishing".to_string(),
+                    start_time: 0.4,
+                    end_time: 1.6,
+                    granularity: Granularity::Sentence,
+                },
+                Segment {
+                    text: "Next phrase".to_string(),
+                    start_time: 1.6,
+                    end_time: 2.4,
+                    granularity: Granularity::Sentence,
+                },
+            ],
+        };
+
+        let config = ChunkConfig::new(1.0);
+        let boundaries = calculate_chunk_boundaries(&transcript, config);
+
+        assert_eq!(boundaries.len(), 2);
+        assert!((boundaries[0].start_time - 0.0).abs() < 1e-9);
+        assert!((boundaries[0].end_time - 1.6).abs() < 1e-9);
+        assert_eq!(boundaries[0].source_segment_ids, vec![0, 1]);
+        assert!((boundaries[1].start_time - 1.6).abs() < 1e-9);
+        assert!((boundaries[1].end_time - 2.4).abs() < 1e-9);
+        assert_eq!(boundaries[1].source_segment_ids, vec![2]);
+    }
+
+    #[test]
+    fn test_segment_exceeding_overshoot_is_split() {
+        let transcript = Transcript {
+            segments: vec![Segment {
+                text: "Long music bed".to_string(),
+                start_time: 0.0,
+                end_time: 2.5,
+                granularity: Granularity::Sentence,
+            }],
+        };
+
+        let config = ChunkConfig::new(1.0);
+        let boundaries = calculate_chunk_boundaries(&transcript, config);
+
+        assert_eq!(boundaries.len(), 3);
+        let starts: Vec<f64> = boundaries
+            .iter()
+            .map(|boundary| boundary.start_time)
+            .collect();
+        let ends: Vec<f64> = boundaries
+            .iter()
+            .map(|boundary| boundary.end_time)
+            .collect();
+        assert_eq!(starts, vec![0.0, 1.0, 2.0]);
+        assert_eq!(ends, vec![1.0, 2.0, 2.5]);
     }
 }

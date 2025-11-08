@@ -49,14 +49,19 @@ pub struct ChunkConfig {
     pub target_duration: f64, // target chunk duration in seconds
     pub min_duration: f64,    // minimum acceptable duration
     pub max_duration: f64,    // maximum acceptable duration
+    pub max_overshoot: f64,   // additional allowable overshoot beyond max_duration
 }
 
 impl ChunkConfig {
     pub fn new(target_duration: f64) -> Self {
+        let min_duration = target_duration * 0.5; // 50% of target
+        let max_duration = target_duration * 1.5; // 150% of target
+        let max_overshoot = target_duration * 0.3; // allow up to +30% if needed
         Self {
             target_duration,
-            min_duration: target_duration * 0.5, // 50% of target
-            max_duration: target_duration * 1.5, // 150% of target
+            min_duration,
+            max_duration,
+            max_overshoot,
         }
     }
 }
@@ -77,8 +82,8 @@ pub struct RecipeStep {
     pub repeat_count: u32,
     /// Speed multiplier for this step (0.5 = slow, 1.0 = normal, 1.5 = fast)
     pub speed_factor: f32,
-    /// Add silence after this step (duration matches speed-adjusted chunk length)
-    pub add_silence_after: bool,
+    /// When true, emit silence chunks instead of audio
+    pub silent: bool,
 }
 
 /// A recipe is a sequence of steps to apply to each chunk
@@ -143,8 +148,8 @@ pub struct RuntimeRecipeStep {
     pub repeat_count: u32,
     #[serde(alias = "speed", alias = "factor")]
     pub speed_factor: f32,
-    #[serde(default, alias = "silence", alias = "addSilence")]
-    pub add_silence_after: bool,
+    #[serde(default, alias = "silent")]
+    pub silent: bool,
 }
 
 impl RuntimeRecipeStep {
@@ -166,7 +171,7 @@ impl RuntimeRecipeStep {
         RecipeStep {
             repeat_count: self.repeat_count,
             speed_factor: self.speed_factor,
-            add_silence_after: self.add_silence_after,
+            silent: self.silent,
         }
     }
 }
