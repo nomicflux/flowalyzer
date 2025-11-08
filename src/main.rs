@@ -22,9 +22,9 @@ struct Args {
     #[arg(value_name = "INPUT")]
     input_file: PathBuf,
 
-    /// Output audio file path (WAV format)
-    #[arg(value_name = "OUTPUT")]
-    output_file: PathBuf,
+    /// Output directory where processed chunk files will be written
+    #[arg(value_name = "OUTPUT_DIR")]
+    output_dir: PathBuf,
 
     /// Target chunk duration in seconds (for linguistic boundary detection)
     #[arg(long, default_value_t = 2.0)]
@@ -72,14 +72,8 @@ impl Args {
             anyhow::bail!("Provide a recipe via --recipe-json or --recipe-file");
         }
 
-        // Check output file has .wav extension
-        if let Some(ext) = self.output_file.extension() {
-            if ext != "wav" {
-                eprintln!(
-                    "Warning: Output file should have .wav extension (got .{})",
-                    ext.to_string_lossy()
-                );
-            }
+        if self.output_dir.exists() && !self.output_dir.is_dir() {
+            anyhow::bail!("Output path must be a directory: {:?}", self.output_dir);
         }
 
         Ok(())
@@ -110,7 +104,7 @@ fn main() -> Result<()> {
 
     println!("Flowalyzer v0.1.0 - Language Learning Audio Processor");
     println!("Input:  {:?}", args.input_file);
-    println!("Output: {:?}", args.output_file);
+    println!("Output dir: {:?}", args.output_dir);
     println!("Target chunk duration: {} seconds", args.target_duration);
 
     let runtime_recipe = args
@@ -132,13 +126,48 @@ fn main() -> Result<()> {
 
     // Pipeline implementation
     println!("\n1. Decoding input audio...");
-    let audio =
+    let decoded_audio =
         audio::decoder::decode_audio(&args.input_file).context("Failed to decode input audio")?;
     println!(
         "   Loaded {} samples at {} Hz",
-        audio.samples.len(),
-        audio.sample_rate
+        decoded_audio.samples.len(),
+        decoded_audio.sample_rate
     );
+
+    let total_duration = decoded_audio.samples.len() as f64 / decoded_audio.sample_rate as f64;
+    let requested_start = trim_start.unwrap_or(0.0);
+    let requested_end = trim_end.unwrap_or(total_duration);
+    ensure!(
+        requested_start >= 0.0,
+        "Trim start must be non-negative (got {:.3})",
+        requested_start
+    );
+    ensure!(
+        requested_start < total_duration,
+        "Trim start ({:.3}) must be less than audio duration ({:.3})",
+        requested_start,
+        total_duration
+    );
+    ensure!(
+        requested_end > requested_start,
+        "Trim end ({:.3}) must be greater than start ({:.3})",
+        requested_end,
+        requested_start
+    );
+    let effective_end = requested_end.min(total_duration);
+    let whole_file = requested_start <= f64::EPSILON
+        && (effective_end - total_duration).abs() <= (1.0 / decoded_audio.sample_rate as f64);
+    let audio = if whole_file {
+        decoded_audio
+    } else {
+        println!(
+            "   Trimming audio to range {:.3}s - {:.3}s (duration {:.3}s)",
+            requested_start,
+            effective_end,
+            effective_end - requested_start
+        );
+        trim_audio_segment(&decoded_audio, requested_start, effective_end)
+    };
 
     // 2. Transcribe audio to get linguistic boundaries
     println!("\n2. Transcribing audio with Whisper...");
@@ -160,33 +189,57 @@ fn main() -> Result<()> {
     let chunks = audio::slicer::slice_audio(&audio, &chunk_boundaries);
     println!("   Sliced into {} audio chunks", chunks.len());
 
-    // 5. Apply language learning recipe to each chunk
-    println!("\n5. Applying language learning recipe to each chunk...");
-    let mut processed_chunks = Vec::new();
+    // 5. Apply recipe to each chunk and write outputs
+    println!("\n5. Applying recipe to each chunk and writing outputs...");
+    fs::create_dir_all(&args.output_dir)
+        .with_context(|| format!("Failed to create output directory {:?}", args.output_dir))?;
+    let mut written = 0usize;
     for (i, chunk) in chunks.iter().enumerate() {
         let processed = operations::recipe::apply_recipe(chunk, &recipe);
-        processed_chunks.extend(processed);
-        if (i + 1) % 10 == 0 {
-            println!("   Processed {}/{} chunks", i + 1, chunks.len());
+        if processed.is_empty() {
+            eprintln!(
+                "   Chunk {} produced no processed segments; skipping",
+                i + 1
+            );
+            continue;
         }
+
+        let chunk_dir = args.output_dir.join(format!("chunk_{:04}", i + 1));
+        fs::create_dir_all(&chunk_dir)
+            .with_context(|| format!("Failed to create chunk output directory {:?}", chunk_dir))?;
+
+        let processed_audio = match audio::assembler::assemble_audio(&processed) {
+            Some(audio) => audio,
+            None => {
+                eprintln!(
+                    "   Failed to assemble processed audio for chunk {}; skipping",
+                    i + 1
+                );
+                continue;
+            }
+        };
+
+        let output_path = chunk_dir.join("processed.wav");
+        audio::encoder::encode_audio(&processed_audio, &output_path).with_context(|| {
+            format!(
+                "Failed to encode processed audio for chunk {} at {:?}",
+                i + 1,
+                output_path
+            )
+        })?;
+        println!(
+            "   Wrote chunk {:04} to {:?} ({:.3}s → {:.3}s)",
+            i + 1,
+            output_path,
+            chunk.start_time,
+            chunk.end_time
+        );
+        written += 1;
     }
     println!(
-        "   Generated {} total chunks ({}x per input)",
-        processed_chunks.len(),
-        processed_chunks.len() / chunks.len()
+        "   Completed writing {} chunk files under {:?}",
+        written, args.output_dir
     );
-
-    // 6. Assemble processed chunks
-    println!("\n6. Assembling processed chunks...");
-    let assembled = audio::assembler::assemble_audio(&processed_chunks)
-        .context("Failed to assemble audio chunks")?;
-    println!("   Assembled {} samples", assembled.samples.len());
-
-    // 7. Encode to output file
-    println!("\n7. Encoding to output file...");
-    audio::encoder::encode_audio(&assembled, &args.output_file)
-        .context("Failed to encode output audio")?;
-    println!("   Written to {:?}", args.output_file);
 
     println!("\n✓ Processing complete!");
 
@@ -270,6 +323,28 @@ fn parse_hms_time(raw: &str) -> Result<f64> {
     Ok(hours * 3600.0 + minutes * 60.0 + seconds)
 }
 
+fn trim_audio_segment(
+    audio: &types::AudioData,
+    start_seconds: f64,
+    end_seconds: f64,
+) -> types::AudioData {
+    let sample_rate = audio.sample_rate;
+    let sr = sample_rate as f64;
+    let total_samples = audio.samples.len();
+
+    let start_index = ((start_seconds * sr).floor().max(0.0)) as usize;
+    let start_index = start_index.min(total_samples);
+    let end_index = ((end_seconds * sr).ceil().max(start_index as f64)) as usize;
+    let end_index = end_index.min(total_samples);
+
+    let samples = audio.samples[start_index..end_index].to_vec();
+
+    types::AudioData {
+        samples,
+        sample_rate,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +380,7 @@ mod tests {
         // This test just ensures Args can be constructed
         let args = Args {
             input_file: PathBuf::from("test.wav"),
-            output_file: PathBuf::from("output.wav"),
+            output_dir: PathBuf::from("output"),
             target_duration: 2.0,
             recipe_json: Some("{}".to_string()),
             recipe_file: None,

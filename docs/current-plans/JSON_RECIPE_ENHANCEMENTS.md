@@ -8,6 +8,7 @@
 
 ## Implementation Details
 - Phase 1 focuses on parsing JSON recipe descriptions and optional start/end times at the CLI boundary.
+- Phase 2 rewires pipeline output to trim input audio to the requested range, apply recipes per chunk, and emit each chunk as an individual WAV under the requested output directory.
 - JSON structure must capture ordered steps including repeat counts, speed factors, and whether to add silence.
 - CLI should accept either inline JSON or a path flag (TBD during implementation) while validating structure.
 - Start/end arguments should accept HH:MM:SS.mmm or seconds; validation must ensure 0 ≤ start < end ≤ audio duration (when available) and start < end > start.
@@ -46,4 +47,27 @@
 **Next Steps**
 - Await user approval before marking `phase-2-pipeline` in progress.
 - No additional actions until approval is received.
+
+## Phase 2 – Pipeline Output Changes Status
+- [x] **Planning Documentation**: Have you consulted/created/updated docs/current-plans/JSON_RECIPE_ENHANCEMENTS.md?
+- [x] **Code Simplicity**
+- [x] **Code Modularity**
+- [x] **Scope Control**
+- [x] **No Dead Code**
+- [x] **No Fake Constructions**
+- [x] **Code Purpose**
+- [x] **Required Tests**
+
+**Deliverables**
+- CLI now treats `OUTPUT_DIR` as a directory, validates it, and creates it when needed.
+- Decoder output is trimmed to the requested `[start, end]` window before transcription; logging reflects effective ranges.
+- For each audio chunk, the recipe is applied, assembled, and written to `chunk_{index}/processed.wav` under the output directory.
+- Legacy single-file assembly removed; processing logs updated to track per-chunk outputs.
+
+**Tests**
+- `cargo clippy --all-targets --all-features` (2025-11-08): no new warnings beyond pre-existing unused-type/dead-code items.
+- `cargo test` (2025-11-08): 35 passed, 1 ignored, 0 failed.
+
+**Issues Encountered**
+- None during Phase 2 implementation; per-chunk outputs and trimming behaved as expected.
 
