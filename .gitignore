@@ -1,0 +1,7 @@
+target/
+vendor/
+*.wav
+*.mp3
+.DS_STORE
+.claude/
+.cursor/
