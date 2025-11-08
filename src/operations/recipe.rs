@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         // First chunk should be audio
-        assert!(results[0].samples.len() > 0);
+        assert!(!results[0].samples.is_empty());
 
         // Second chunk should be silence (all zeros)
         assert!(results[1].samples.iter().all(|&s| s == 0.0));

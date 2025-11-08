@@ -1,4 +1,7 @@
-/// Core types for flowalyzer audio processing pipeline
+//! Core types for flowalyzer audio processing pipeline
+
+use anyhow::{ensure, Result};
+use serde::Deserialize;
 
 /// Raw audio data representation (mono, f32 samples)
 #[derive(Debug, Clone)]
@@ -8,9 +11,6 @@ pub struct AudioData {
     /// Sample rate in Hz (e.g., 44100)
     pub sample_rate: u32,
 }
-
-use anyhow::{ensure, Result};
-use serde::Deserialize;
 
 /// Transcription output containing timestamped segments
 #[derive(Debug, Clone)]

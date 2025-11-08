@@ -193,53 +193,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_time_seconds() {
-        let result = parse_optional_time(Some("12.5"), "start").unwrap();
-        assert_eq!(result, Some(12.5));
-    }
-
-    #[test]
-    fn parse_time_hms() {
-        let result = parse_optional_time(Some("01:02:03.5"), "end").unwrap();
-        let expected = 3600.0 + 120.0 + 3.5;
-        assert!((result.unwrap() - expected).abs() < 1e-6);
-    }
-
-    #[test]
-    fn parse_recipe_inline_json() {
-        let json = r#"{
-            "name": "test",
-            "steps": [
-                {"repeat_count": 2, "speed_factor": 1.0, "add_silence_after": true}
-            ]
-        }"#;
-        let recipe = parse_runtime_recipe(json).unwrap();
-        assert_eq!(recipe.name.as_deref(), Some("test"));
-        assert_eq!(recipe.steps.len(), 1);
-    }
-
-    #[test]
-    fn test_verify_cli_args_compile() {
-        // This test just ensures Args can be constructed
-        let args = Args {
-            input_file: PathBuf::from("test.wav"),
-            output_file: PathBuf::from("output.wav"),
-            target_duration: 2.0,
-            recipe_json: Some("{}".to_string()),
-            recipe_file: None,
-            start: None,
-            end: None,
-        };
-
-        assert_eq!(args.target_duration, 2.0);
-    }
-}
-
 fn load_recipe_from_sources(
     path: Option<&Path>,
     json: Option<&str>,
@@ -315,4 +268,51 @@ fn parse_hms_time(raw: &str) -> Result<f64> {
     };
 
     Ok(hours * 3600.0 + minutes * 60.0 + seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_time_seconds() {
+        let result = parse_optional_time(Some("12.5"), "start").unwrap();
+        assert_eq!(result, Some(12.5));
+    }
+
+    #[test]
+    fn parse_time_hms() {
+        let result = parse_optional_time(Some("01:02:03.5"), "end").unwrap();
+        let expected = 3600.0 + 120.0 + 3.5;
+        assert!((result.unwrap() - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parse_recipe_inline_json() {
+        let json = r#"{
+            "name": "test",
+            "steps": [
+                {"repeat_count": 2, "speed_factor": 1.0, "add_silence_after": true}
+            ]
+        }"#;
+        let recipe = parse_runtime_recipe(json).unwrap();
+        assert_eq!(recipe.name.as_deref(), Some("test"));
+        assert_eq!(recipe.steps.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_cli_args_compile() {
+        // This test just ensures Args can be constructed
+        let args = Args {
+            input_file: PathBuf::from("test.wav"),
+            output_file: PathBuf::from("output.wav"),
+            target_duration: 2.0,
+            recipe_json: Some("{}".to_string()),
+            recipe_file: None,
+            start: None,
+            end: None,
+        };
+
+        assert_eq!(args.target_duration, 2.0);
+    }
 }

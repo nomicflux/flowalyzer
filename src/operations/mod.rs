@@ -6,7 +6,6 @@ pub mod speed;
 use crate::types::{AudioChunk, Operation};
 
 // Re-export operation functions for convenience
-pub use recipe::apply_recipe;
 pub use repeat::repeat_chunk;
 pub use silence::insert_silence;
 pub use speed::change_speed;
