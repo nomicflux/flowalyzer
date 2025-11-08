@@ -21,7 +21,6 @@ pub fn slice_audio(audio: &AudioData, boundaries: &[ChunkBoundary]) -> Vec<Audio
             sample_rate: audio.sample_rate,
             start_time: boundary.start_time,
             end_time: boundary.end_time,
-            metadata: None,
         });
     }
 

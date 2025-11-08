@@ -33,10 +33,14 @@ use crate::types::{AudioChunk, Recipe};
 ///     sample_rate: 44100,
 ///     start_time: 0.0,
 ///     end_time: 0.1,
-///     metadata: None,
 /// };
 ///
-/// let recipe = Recipe::language_learning();
+/// let recipe = Recipe::new("language-learning")
+///     .add_step(RecipeStep {
+///         repeat_count: 3,
+///         speed_factor: 0.5,
+///         add_silence_after: true,
+///     });
 /// let results = apply_recipe(&chunk, &recipe);
 ///
 /// // Language learning: (3 slow + silence) + (3 normal + silence) + (3 fast + silence) = 12 chunks
@@ -67,6 +71,7 @@ pub fn apply_recipe(chunk: &AudioChunk, recipe: &Recipe) -> Vec<AudioChunk> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::operations::speed::change_speed;
     use crate::types::RecipeStep;
 
     fn create_test_chunk() -> AudioChunk {
@@ -86,7 +91,6 @@ mod tests {
             sample_rate,
             start_time: 0.0,
             end_time: duration,
-            metadata: None,
         }
     }
 
@@ -148,7 +152,22 @@ mod tests {
     #[test]
     fn test_apply_language_learning_recipe() {
         let chunk = create_test_chunk(); // 1-second chunk
-        let recipe = Recipe::language_learning();
+        let recipe = Recipe::new("language-learning")
+            .add_step(RecipeStep {
+                repeat_count: 3,
+                speed_factor: 0.5,
+                add_silence_after: true,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 3,
+                speed_factor: 1.0,
+                add_silence_after: true,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 3,
+                speed_factor: 1.5,
+                add_silence_after: true,
+            });
 
         let results = apply_recipe(&chunk, &recipe);
 
@@ -246,5 +265,31 @@ mod tests {
         // Last 2 should be fast (shorter)
         assert!(results[2].samples.len() < chunk.samples.len());
         assert!(results[3].samples.len() < chunk.samples.len());
+    }
+
+    #[test]
+    fn test_recipe_uses_original_chunk_each_step() {
+        let chunk = create_test_chunk();
+        let mut recipe = Recipe::new("reuse");
+        recipe = recipe
+            .add_step(RecipeStep {
+                repeat_count: 1,
+                speed_factor: 0.75,
+                add_silence_after: false,
+            })
+            .add_step(RecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.5,
+                add_silence_after: false,
+            });
+
+        let results = apply_recipe(&chunk, &recipe);
+        assert_eq!(results.len(), 2);
+
+        let slow = change_speed(&chunk, 0.75);
+        let fast = change_speed(&chunk, 1.5);
+
+        assert_eq!(results[0].samples, slow.samples);
+        assert_eq!(results[1].samples, fast.samples);
     }
 }

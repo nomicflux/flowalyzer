@@ -61,36 +61,13 @@ impl ChunkConfig {
     }
 }
 
-/// An audio chunk with timing metadata
+/// An audio chunk with timing information
 #[derive(Debug, Clone)]
 pub struct AudioChunk {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub start_time: f64, // original position in source audio
     pub end_time: f64,
-    pub metadata: Option<ChunkMetadata>,
-}
-
-/// Optional metadata for audio chunks
-#[derive(Debug, Clone, Default)]
-pub struct ChunkMetadata {
-    /// Mean fundamental frequency (Hz)
-    pub f0_mean: Option<f32>,
-    /// Standard deviation of fundamental frequency
-    pub f0_std: Option<f32>,
-}
-
-/// Operations that can be applied to audio chunks
-#[derive(Debug, Clone)]
-pub enum Operation {
-    /// Repeat the chunk N times
-    Repeat(u32),
-    /// Speed multiplier (0.5 = half speed, 2.0 = double speed)
-    Speed(f32),
-    /// Insert silence after chunk (seconds)
-    InsertSilence(f64),
-    /// No operation
-    Identity,
 }
 
 /// A single step in a recipe: repeat N times at specific speed, optionally add silence after
@@ -126,30 +103,6 @@ impl Recipe {
     pub fn add_step(mut self, step: RecipeStep) -> Self {
         self.steps.push(step);
         self
-    }
-
-    /// Create the standard language learning recipe (3x slow, 3x normal, 3x fast with silences)
-    pub fn language_learning() -> Self {
-        Self {
-            name: "language-learning".to_string(),
-            steps: vec![
-                RecipeStep {
-                    repeat_count: 3,
-                    speed_factor: 0.5,
-                    add_silence_after: true,
-                },
-                RecipeStep {
-                    repeat_count: 3,
-                    speed_factor: 1.0,
-                    add_silence_after: true,
-                },
-                RecipeStep {
-                    repeat_count: 3,
-                    speed_factor: 1.5,
-                    add_silence_after: true,
-                },
-            ],
-        }
     }
 }
 
@@ -215,49 +168,5 @@ impl RuntimeRecipeStep {
             speed_factor: self.speed_factor,
             add_silence_after: self.add_silence_after,
         }
-    }
-}
-
-/// Selector for which chunks to apply an operation to
-#[derive(Debug, Clone)]
-pub enum ChunkSelector {
-    /// Apply to all chunks
-    All,
-    /// Apply to specific chunk by index
-    Index(usize),
-    /// Apply to range of chunks [start, end)
-    Range(usize, usize),
-}
-
-/// A rule defining an operation and which chunks it applies to
-#[derive(Debug, Clone)]
-pub struct ProcessingRule {
-    pub selector: ChunkSelector,
-    pub operation: Operation,
-}
-
-/// A complete processing plan with multiple rules
-#[derive(Debug, Clone)]
-pub struct ProcessingPlan {
-    pub rules: Vec<ProcessingRule>,
-}
-
-impl ProcessingPlan {
-    pub fn new() -> Self {
-        Self { rules: Vec::new() }
-    }
-
-    pub fn add_rule(mut self, selector: ChunkSelector, operation: Operation) -> Self {
-        self.rules.push(ProcessingRule {
-            selector,
-            operation,
-        });
-        self
-    }
-}
-
-impl Default for ProcessingPlan {
-    fn default() -> Self {
-        Self::new()
     }
 }

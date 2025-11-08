@@ -71,14 +71,12 @@ mod tests {
                 sample_rate: 44100,
                 start_time: 0.0,
                 end_time: 0.1,
-                metadata: None,
             },
             AudioChunk {
                 samples: vec![0.5; 100],
                 sample_rate: 44100,
                 start_time: 0.1,
                 end_time: 0.2,
-                metadata: None,
             },
         ];
 
@@ -107,14 +105,12 @@ mod tests {
                 sample_rate: 44100,
                 start_time: 0.0,
                 end_time: 0.1,
-                metadata: None,
             },
             AudioChunk {
                 samples: vec![0.5; 100],
                 sample_rate: 48000, // Different!
                 start_time: 0.1,
                 end_time: 0.2,
-                metadata: None,
             },
         ];
 

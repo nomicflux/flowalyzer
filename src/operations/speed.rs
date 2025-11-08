@@ -28,7 +28,6 @@ use ssstretch::Stretch;
 ///     sample_rate: 44100,
 ///     start_time: 0.0,
 ///     end_time: 0.1,
-///     metadata: None,
 /// };
 ///
 /// // Make it 50% slower (2x longer)
@@ -36,44 +35,77 @@ use ssstretch::Stretch;
 /// assert!(slower.samples.len() > chunk.samples.len());
 /// ```
 pub fn change_speed(chunk: &AudioChunk, speed_factor: f32) -> AudioChunk {
-    // Edge case: speed_factor = 1.0, return identical chunk
-    if (speed_factor - 1.0).abs() < 1e-6 {
+    if is_identity_speed(speed_factor) {
         return chunk.clone();
     }
 
-    // Create and configure mono stretcher
-    let mut stretch = Stretch::new();
-    stretch.preset_default(1, chunk.sample_rate as f32); // 1 channel, chunk's sample rate
-
-    // Calculate output length based on speed factor
-    // speed_factor < 1.0 = slower = longer output
-    // speed_factor > 1.0 = faster = shorter output
-    let output_len = (chunk.samples.len() as f32 / speed_factor).round() as usize;
-
-    // Prepare input and output buffers as Vec<Vec<f32>> (channel arrays)
-    let inputs = vec![chunk.samples.clone()];
-    let mut outputs = vec![Vec::new()]; // Will be resized by process_vec
-
-    // Process audio through stretcher
-    stretch.process_vec(
-        &inputs,                    // Input: slice of channel vecs
-        chunk.samples.len() as i32, // Input length
-        &mut outputs,               // Output: mutable slice of channel vecs
-        output_len as i32,          // Output length
-    );
-
-    // Extract processed samples from first (and only) channel
-    let output_samples = outputs.into_iter().next().unwrap();
-
-    // Calculate new duration
-    let new_duration = output_samples.len() as f64 / chunk.sample_rate as f64;
+    let mut stretch = configured_stretch(chunk.sample_rate);
+    let target_len = target_length(chunk.samples.len(), speed_factor);
+    let latency = stretch.output_latency().max(0) as usize;
+    let mut samples =
+        collect_stretched_samples(&mut stretch, &chunk.samples, target_len + latency, latency);
+    adjust_for_latency(&mut samples, latency, target_len);
+    let new_duration = samples.len() as f64 / chunk.sample_rate as f64;
 
     AudioChunk {
-        samples: output_samples,
+        samples,
         sample_rate: chunk.sample_rate,
         start_time: chunk.start_time,
         end_time: chunk.start_time + new_duration,
-        metadata: None,
+    }
+}
+
+fn is_identity_speed(speed_factor: f32) -> bool {
+    (speed_factor - 1.0).abs() < 1e-6
+}
+
+fn configured_stretch(sample_rate: u32) -> Stretch {
+    let mut stretch = Stretch::new();
+    stretch.preset_default(1, sample_rate as f32);
+    stretch
+}
+
+fn target_length(sample_count: usize, speed_factor: f32) -> usize {
+    (((sample_count as f64) / (speed_factor as f64)).round() as usize).max(1)
+}
+
+fn collect_stretched_samples(
+    stretch: &mut Stretch,
+    input: &[f32],
+    process_len: usize,
+    latency: usize,
+) -> Vec<f32> {
+    let inputs = vec![input.to_vec()];
+    let mut outputs = vec![Vec::new()];
+    stretch.process_vec(
+        &inputs,
+        input.len() as i32,
+        &mut outputs,
+        process_len as i32,
+    );
+
+    let mut samples = outputs.into_iter().next().unwrap_or_default();
+    if latency > 0 {
+        let mut flush_outputs = vec![Vec::new()];
+        stretch.flush_vec(&mut flush_outputs, latency as i32);
+        if let Some(flush_channel) = flush_outputs.into_iter().next() {
+            samples.extend(flush_channel);
+        }
+    }
+    samples
+}
+
+fn adjust_for_latency(samples: &mut Vec<f32>, latency: usize, target_len: usize) {
+    let skip = latency.min(samples.len());
+    if skip > 0 {
+        samples.drain(0..skip);
+    }
+
+    if samples.len() > target_len {
+        samples.truncate(target_len);
+    } else if samples.len() < target_len {
+        let tail = samples.last().copied().unwrap_or(0.0);
+        samples.resize(target_len, tail);
     }
 }
 
@@ -94,7 +126,6 @@ mod tests {
             sample_rate: 44100,
             start_time: 0.0,
             end_time: num_samples as f64 / 44100.0,
-            metadata: None,
         }
     }
 
@@ -147,7 +178,6 @@ mod tests {
             sample_rate: 48000,
             start_time: 0.0,
             end_time: 0.5,
-            metadata: None,
         };
 
         let result = change_speed(&chunk, 1.5);
@@ -169,5 +199,22 @@ mod tests {
                 factor
             );
         }
+    }
+
+    #[test]
+    fn test_speed_fast_preserves_tail_energy() {
+        let mut chunk = create_test_chunk(1500);
+        let last_index = chunk.samples.len().saturating_sub(1);
+        chunk.samples[last_index] = 0.8; // Ensure non-zero tail
+
+        let result = change_speed(&chunk, 2.5); // Fast playback
+        let tail_energy: f32 = result.samples.iter().rev().take(100).map(|s| s.abs()).sum();
+        let tail_samples: Vec<f32> = result.samples.iter().rev().take(10).cloned().collect();
+        assert!(
+            tail_energy > 0.05,
+            "Fast playback tail energy too low: {} tail_samples={:?}",
+            tail_energy,
+            tail_samples
+        );
     }
 }

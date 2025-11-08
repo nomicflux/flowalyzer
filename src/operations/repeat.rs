@@ -32,7 +32,6 @@ mod tests {
             sample_rate: 44100,
             start_time: 0.0,
             end_time: 0.1,
-            metadata: None,
         }
     }
 

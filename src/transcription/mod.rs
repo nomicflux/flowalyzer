@@ -55,12 +55,18 @@ pub fn transcribe_audio(audio: &AudioData) -> Result<Transcript> {
         // Timestamps are in centiseconds (10s of milliseconds), convert to seconds
         let start_time = segment.start_timestamp() as f64 / 100.0;
         let end_time = segment.end_timestamp() as f64 / 100.0;
+        let duration = end_time - start_time;
+        let granularity = if duration < 1.0 {
+            Granularity::Word
+        } else {
+            Granularity::Sentence
+        };
 
         segments.push(Segment {
             text,
             start_time,
             end_time,
-            granularity: Granularity::Sentence, // Whisper segments are typically sentences
+            granularity,
         });
     }
 

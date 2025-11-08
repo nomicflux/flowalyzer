@@ -9,6 +9,8 @@
 ## Implementation Details
 - Phase 1 focuses on parsing JSON recipe descriptions and optional start/end times at the CLI boundary.
 - Phase 2 rewires pipeline output to trim input audio to the requested range, apply recipes per chunk, and emit each chunk as an individual WAV under the requested output directory.
+- Phase 3 ensures time-stretching preserves tail audio by compensating for stretcher latency, flushing remaining samples, and verifying that recipe steps always reuse the original chunk.
+- Deprecated scaffolding (`Operation`, `ProcessingPlan`, chunk metadata) removed to keep the codebase lean and clippy-clean; runtime logging now exercises transcript text, granularity, and boundary source segment data.
 - JSON structure must capture ordered steps including repeat counts, speed factors, and whether to add silence.
 - CLI should accept either inline JSON or a path flag (TBD during implementation) while validating structure.
 - Start/end arguments should accept HH:MM:SS.mmm or seconds; validation must ensure 0 ≤ start < end ≤ audio duration (when available) and start < end > start.
@@ -70,4 +72,25 @@
 
 **Issues Encountered**
 - None during Phase 2 implementation; per-chunk outputs and trimming behaved as expected.
+
+## Phase 3 – Fast Playback Integrity & Testing Status
+- [x] **Planning Documentation**
+- [x] **Code Simplicity**
+- [x] **Code Modularity**
+- [x] **Scope Control**
+- [x] **No Dead Code**
+- [x] **No Fake Constructions**
+- [x] **Code Purpose**
+- [x] **Required Tests**
+
+**Deliverables**
+- Updated `operations::speed::change_speed` to request extra output, flush residual samples, drop leading latency, and normalize length, preventing fast-playback truncation.
+- Added regression tests `test_speed_fast_preserves_tail_energy` and `test_recipe_uses_original_chunk_each_step` to confirm tail integrity and recipe reuse of the source chunk.
+
+**Tests**
+- `cargo clippy --all-targets --all-features` (2025-11-08): clean (no warnings).
+- `cargo test` (2025-11-08): 32 passed, 1 ignored, 0 failed.
+
+**Issues Encountered**
+- Signalsmith Stretch introduces equal input/output latency (~2646 samples). Without trimming those leading samples, fast outputs ended in silence. Resolved by padding output length, flushing the stretcher, and discarding the latency window before truncation.
 

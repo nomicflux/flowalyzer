@@ -4,7 +4,7 @@ mod operations;
 mod transcription;
 mod types;
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 use std::{fs, path::Path};
@@ -96,154 +96,242 @@ impl Args {
 }
 
 fn main() -> Result<()> {
-    let args = Args::parse();
+    run(Args::parse())
+}
 
-    // Validate arguments
+fn run(args: Args) -> Result<()> {
     args.validate()
         .context("Failed to validate command-line arguments")?;
+    print_banner(&args);
+    let recipe = load_recipe(&args)?;
+    log_recipe(&recipe);
+    let trim = args.trim_range()?;
+    log_trim_request(trim);
+    let audio = decode_and_trim(&args, trim)?;
+    let transcript = transcribe_with_logging(&audio)?;
+    let boundaries = plan_chunks(&transcript, args.target_duration);
+    let chunks = slice_chunks(&audio, &boundaries);
+    write_chunks(&chunks, &boundaries, &recipe, &args.output_dir)?;
+    println!("\n✓ Processing complete!");
+    Ok(())
+}
 
+fn print_banner(args: &Args) {
     println!("Flowalyzer v0.1.0 - Language Learning Audio Processor");
     println!("Input:  {:?}", args.input_file);
     println!("Output dir: {:?}", args.output_dir);
     println!("Target chunk duration: {} seconds", args.target_duration);
+}
 
-    let runtime_recipe = args
+fn load_recipe(args: &Args) -> Result<types::Recipe> {
+    let runtime = args
         .runtime_recipe()
         .context("Failed to load recipe specification")?;
-    runtime_recipe
-        .validate()
-        .context("Recipe validation failed")?;
-    let recipe = runtime_recipe.to_recipe();
-    println!("Recipe: {} ({} steps)", recipe.name, recipe.steps.len());
+    runtime.validate().context("Recipe validation failed")?;
+    Ok(runtime.to_recipe())
+}
 
-    let (trim_start, trim_end) = args.trim_range()?;
-    if let Some(start) = trim_start {
+fn log_recipe(recipe: &types::Recipe) {
+    println!("Recipe: {} ({} steps)", recipe.name, recipe.steps.len());
+}
+
+fn log_trim_request(trim: (Option<f64>, Option<f64>)) {
+    if let Some(start) = trim.0 {
         println!("Trim start: {:.3} seconds", start);
     }
-    if let Some(end) = trim_end {
+    if let Some(end) = trim.1 {
         println!("Trim end: {:.3} seconds", end);
     }
+}
 
-    // Pipeline implementation
+fn decode_and_trim(args: &Args, trim: (Option<f64>, Option<f64>)) -> Result<types::AudioData> {
     println!("\n1. Decoding input audio...");
-    let decoded_audio =
+    let decoded =
         audio::decoder::decode_audio(&args.input_file).context("Failed to decode input audio")?;
     println!(
         "   Loaded {} samples at {} Hz",
-        decoded_audio.samples.len(),
-        decoded_audio.sample_rate
+        decoded.samples.len(),
+        decoded.sample_rate
     );
-
-    let total_duration = decoded_audio.samples.len() as f64 / decoded_audio.sample_rate as f64;
-    let requested_start = trim_start.unwrap_or(0.0);
-    let requested_end = trim_end.unwrap_or(total_duration);
+    let total_duration = decoded.samples.len() as f64 / decoded.sample_rate as f64;
+    let start = trim.0.unwrap_or(0.0);
+    let end = trim.1.unwrap_or(total_duration);
     ensure!(
-        requested_start >= 0.0,
+        start >= 0.0,
         "Trim start must be non-negative (got {:.3})",
-        requested_start
+        start
     );
     ensure!(
-        requested_start < total_duration,
+        start < total_duration,
         "Trim start ({:.3}) must be less than audio duration ({:.3})",
-        requested_start,
+        start,
         total_duration
     );
     ensure!(
-        requested_end > requested_start,
+        end > start,
         "Trim end ({:.3}) must be greater than start ({:.3})",
-        requested_end,
-        requested_start
+        end,
+        start
     );
-    let effective_end = requested_end.min(total_duration);
-    let whole_file = requested_start <= f64::EPSILON
-        && (effective_end - total_duration).abs() <= (1.0 / decoded_audio.sample_rate as f64);
-    let audio = if whole_file {
-        decoded_audio
-    } else {
+    let effective_end = end.min(total_duration);
+    if start > 0.0 || effective_end < total_duration {
         println!(
             "   Trimming audio to range {:.3}s - {:.3}s (duration {:.3}s)",
-            requested_start,
+            start,
             effective_end,
-            effective_end - requested_start
+            effective_end - start
         );
-        trim_audio_segment(&decoded_audio, requested_start, effective_end)
-    };
+        return Ok(trim_audio_segment(&decoded, start, effective_end));
+    }
+    Ok(decoded)
+}
 
-    // 2. Transcribe audio to get linguistic boundaries
+fn transcribe_with_logging(audio: &types::AudioData) -> Result<types::Transcript> {
     println!("\n2. Transcribing audio with Whisper...");
     let transcript =
-        transcription::transcribe_audio(&audio).context("Failed to transcribe audio")?;
+        transcription::transcribe_audio(audio).context("Failed to transcribe audio")?;
     println!("   Found {} segments", transcript.segments.len());
+    log_transcript_preview(&transcript);
+    Ok(transcript)
+}
 
-    // 3. Calculate chunk boundaries at linguistic breaks
-    println!("\n3. Calculating linguistic chunk boundaries...");
-    let config = types::ChunkConfig::new(args.target_duration);
-    let chunk_boundaries = chunking::calculate_chunk_boundaries(&transcript, config);
-    println!(
-        "   Created {} chunks at natural breaks",
-        chunk_boundaries.len()
-    );
-
-    // 4. Slice audio into chunks
-    println!("\n4. Slicing audio into chunks...");
-    let chunks = audio::slicer::slice_audio(&audio, &chunk_boundaries);
-    println!("   Sliced into {} audio chunks", chunks.len());
-
-    // 5. Apply recipe to each chunk and write outputs
-    println!("\n5. Applying recipe to each chunk and writing outputs...");
-    fs::create_dir_all(&args.output_dir)
-        .with_context(|| format!("Failed to create output directory {:?}", args.output_dir))?;
-    let mut written = 0usize;
-    for (i, chunk) in chunks.iter().enumerate() {
-        let processed = operations::recipe::apply_recipe(chunk, &recipe);
-        if processed.is_empty() {
-            eprintln!(
-                "   Chunk {} produced no processed segments; skipping",
-                i + 1
-            );
-            continue;
-        }
-
-        let chunk_dir = args.output_dir.join(format!("chunk_{:04}", i + 1));
-        fs::create_dir_all(&chunk_dir)
-            .with_context(|| format!("Failed to create chunk output directory {:?}", chunk_dir))?;
-
-        let processed_audio = match audio::assembler::assemble_audio(&processed) {
-            Some(audio) => audio,
-            None => {
-                eprintln!(
-                    "   Failed to assemble processed audio for chunk {}; skipping",
-                    i + 1
-                );
-                continue;
+fn log_transcript_preview(transcript: &types::Transcript) {
+    let sentence_segments = transcript
+        .segments
+        .iter()
+        .filter(|segment| matches!(segment.granularity, types::Granularity::Sentence))
+        .count();
+    let word_segments = transcript
+        .segments
+        .iter()
+        .filter(|segment| matches!(segment.granularity, types::Granularity::Word))
+        .count();
+    let preview: Vec<String> = transcript
+        .segments
+        .iter()
+        .take(3)
+        .map(|segment| {
+            let mut text = segment.text.trim().replace('\n', " ");
+            if text.len() > 40 {
+                text.truncate(40);
+                text.push('…');
             }
-        };
-
-        let output_path = chunk_dir.join("processed.wav");
-        audio::encoder::encode_audio(&processed_audio, &output_path).with_context(|| {
-            format!(
-                "Failed to encode processed audio for chunk {} at {:?}",
-                i + 1,
-                output_path
-            )
-        })?;
+            text
+        })
+        .collect();
+    if preview.is_empty() {
         println!(
-            "   Wrote chunk {:04} to {:?} ({:.3}s → {:.3}s)",
-            i + 1,
-            output_path,
-            chunk.start_time,
-            chunk.end_time
+            "   Segment mix: {} sentence / {} word",
+            sentence_segments, word_segments
         );
-        written += 1;
+    } else {
+        println!(
+            "   Segment mix: {} sentence / {} word; preview: {}",
+            sentence_segments,
+            word_segments,
+            preview.join(" | ")
+        );
     }
+}
+
+fn plan_chunks(transcript: &types::Transcript, target_duration: f64) -> Vec<types::ChunkBoundary> {
+    println!("\n3. Calculating linguistic chunk boundaries...");
+    let config = types::ChunkConfig::new(target_duration);
+    let boundaries = chunking::calculate_chunk_boundaries(transcript, config);
+    println!("   Created {} chunks at natural breaks", boundaries.len());
+    if !boundaries.is_empty() {
+        let total_segments: usize = boundaries
+            .iter()
+            .map(|boundary| boundary.source_segment_ids.len())
+            .sum();
+        println!(
+            "   Average transcript segments per chunk: {:.2}",
+            total_segments as f64 / boundaries.len() as f64
+        );
+    }
+    boundaries
+}
+
+fn slice_chunks(
+    audio: &types::AudioData,
+    boundaries: &[types::ChunkBoundary],
+) -> Vec<types::AudioChunk> {
+    println!("\n4. Slicing audio into chunks...");
+    let chunks = audio::slicer::slice_audio(audio, boundaries);
+    println!("   Sliced into {} audio chunks", chunks.len());
+    chunks
+}
+
+fn write_chunks(
+    chunks: &[types::AudioChunk],
+    boundaries: &[types::ChunkBoundary],
+    recipe: &types::Recipe,
+    output_dir: &Path,
+) -> Result<()> {
+    println!("\n5. Applying recipe to each chunk and writing outputs...");
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create output directory {:?}", output_dir))?;
+    let mut written = 0usize;
+    for (index, chunk) in chunks.iter().enumerate() {
+        if write_single_chunk(index, chunk, &boundaries[index], recipe, output_dir)? {
+            written += 1;
+        }
+        log_chunk_progress(index, chunks.len());
+    }
+    log_chunk_summary(written, output_dir);
+    Ok(())
+}
+
+fn write_single_chunk(
+    index: usize,
+    chunk: &types::AudioChunk,
+    boundary: &types::ChunkBoundary,
+    recipe: &types::Recipe,
+    output_dir: &Path,
+) -> Result<bool> {
+    let processed = operations::recipe::apply_recipe(chunk, recipe);
+    if processed.is_empty() {
+        eprintln!(
+            "   Chunk {} produced no processed segments; skipping",
+            index + 1
+        );
+        return Ok(false);
+    }
+    let chunk_dir = output_dir.join(format!("chunk_{:04}", index + 1));
+    fs::create_dir_all(&chunk_dir)
+        .with_context(|| format!("Failed to create chunk output directory {:?}", chunk_dir))?;
+    let processed_audio = audio::assembler::assemble_audio(&processed)
+        .ok_or_else(|| anyhow!("Failed to assemble processed audio for chunk {}", index + 1))?;
+    let output_path = chunk_dir.join("processed.wav");
+    audio::encoder::encode_audio(&processed_audio, &output_path).with_context(|| {
+        format!(
+            "Failed to encode processed audio for chunk {} at {:?}",
+            index + 1,
+            output_path
+        )
+    })?;
+    println!(
+        "   Wrote chunk {:04} to {:?} ({:.3}s → {:.3}s, {} transcript segments)",
+        index + 1,
+        output_path,
+        chunk.start_time,
+        chunk.end_time,
+        boundary.source_segment_ids.len()
+    );
+    Ok(true)
+}
+
+fn log_chunk_progress(index: usize, total: usize) {
+    if (index + 1).is_multiple_of(10) || index + 1 == total {
+        println!("   Processed {}/{} chunks", index + 1, total);
+    }
+}
+
+fn log_chunk_summary(written: usize, output_dir: &Path) {
     println!(
         "   Completed writing {} chunk files under {:?}",
-        written, args.output_dir
+        written, output_dir
     );
-
-    println!("\n✓ Processing complete!");
-
-    Ok(())
 }
 
 fn load_recipe_from_sources(

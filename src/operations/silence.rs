@@ -33,7 +33,6 @@ pub fn insert_silence(duration: f64, sample_rate: u32) -> AudioChunk {
         sample_rate,
         start_time: 0.0,
         end_time: duration,
-        metadata: None,
     }
 }
 
