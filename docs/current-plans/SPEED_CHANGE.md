@@ -15,9 +15,25 @@
 - (2025-11-09) User: "Absolutely no other processing for any reason."
 
 ## Implementation Details
-- `change_speed` must push the full chunk into `ssstretch`, collect all output frames without using `target_length`, and return them exactly as emitted by the stretcher with no additional post-processing or trimming.
-- `collect_stretched_samples` must process the entire input in one call to `process_vec`, then repeatedly call `flush_vec` (e.g. with 1024 frame blocks) until it yields zero-length output, aggregating every frame emitted.
-- The stretcher output is authoritative for total sample count; downstream logic and tests must accept that constant stretcher latency is present and perform no latency-aware adjustments.
+- `change_speed` pushes the original chunk into `ssstretch`, lets the stretcher emit the stretched samples, and returns them verbatim with metadata updated from the emitted length.
+- `collect_stretched_samples` pads the chunk with `input_latency` silence, requests `ceil((input_len + input_latency + block_samples)/speed)` frames in a single `process_vec` call, flushes one `output_latency` block, and returns the combined frames with no trimming.
+- The stretcher output is the source of truth; downstream code and tests accept the stretcher-determined length and latency.
+
+## Contract Restatement (2025-11-09)
+- `change_speed` accepts an `AudioChunk`, configures `ssstretch::Stretch` for the chunk’s channel count and sample rate, applies the requested speed factor via the stretcher, and returns exactly the emitted samples with unchanged metadata except for `end_time` computed from the returned sample count.
+- No other operations are permitted: no target-length estimation, no latency trimming, no tail/head edits, no verification passes, and no additional filtering or transformations.
+
+## Research Notes (2025-11-09)
+- `SignalsmithStretch::process` maps each output frame via `round(outputIndex * inputSamples / outputSamples) - windowSize`; choosing `outputSamples = ceil((inputSamples + windowSize)/stretch)` ensures the final window lands on valid input.
+- Padding the chunk with `input_latency` silence and flushing `output_latency` samples matches the documentation’s “Ending” guidance without additional heuristics.
+
+## Phase 1 Status (2025-11-09)
+- Completed cargo fmt/clippy/test; all commands succeeded with zero warnings or failures.
+- Waiting on approval to proceed to Phase 2.
+
+## Phase 2 Notes (2025-11-09)
+- `collect_stretched_samples` pads with `input_latency`, requests `ceil((padded_len + block_samples)/speed)` frames in one pass, flushes a single `output_latency` block, and returns the stretcher output unaltered.
+- Tests now verify tail energy and fast-chunk duration using the stretcher-provided sample counts (all pass with the new sizing).
 
 ## Issues Encountered
 - None yet.
