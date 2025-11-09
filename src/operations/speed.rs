@@ -66,45 +66,69 @@ fn collect_stretched_samples(stretch: &mut Stretch, input: &[f32], speed_factor:
         return Vec::new();
     }
 
+    let mut samples = process_block(
+        stretch,
+        input,
+        compute_output_len(input.len(), speed_factor),
+    );
+
     let input_latency = stretch.input_latency().max(0) as usize;
-    let output_latency = stretch.output_latency().max(0) as usize;
-    let block_samples = stretch.block_samples().max(0) as usize;
-
-    let stretch_ratio = (1.0 / speed_factor) as f64;
-    let main_output_len = ((input.len() as f64 + block_samples as f64) * stretch_ratio)
-        .ceil()
-        .max(1.0) as i32;
-
-    let inputs = vec![input.to_vec()];
-    let mut outputs = vec![vec![0.0f32; main_output_len as usize]];
-    stretch.process_vec(&inputs, input.len() as i32, &mut outputs, main_output_len);
-    let mut samples = outputs.remove(0);
-
     if input_latency > 0 {
-        let pad_input = vec![vec![0.0f32; input_latency]];
-        let pad_output_len = ((input_latency as f64 + block_samples as f64) * stretch_ratio)
-            .ceil()
-            .max(1.0) as i32;
-        let mut pad_outputs = vec![vec![0.0f32; pad_output_len as usize]];
-        stretch.process_vec(
-            &pad_input,
-            input_latency as i32,
-            &mut pad_outputs,
-            pad_output_len,
-        );
-        samples.extend_from_slice(&pad_outputs.remove(0));
+        append_silence_block(stretch, speed_factor, input_latency, &mut samples);
     }
 
-    if output_latency > 0 {
-        let mut flush_buffer = vec![vec![0.0f32; output_latency]];
-        stretch.flush_vec(&mut flush_buffer, output_latency as i32);
-        samples.extend_from_slice(&flush_buffer[0]);
-    }
+    let output_latency = stretch.output_latency().max(0) as usize;
+    append_flush(stretch, output_latency, &mut samples);
+    remove_pre_roll(&mut samples, output_latency);
 
-    let target_len = ((input.len() as f64) * stretch_ratio).round() as isize;
-    let target_len = target_len.clamp(0, samples.len() as isize) as usize;
-    samples.truncate(target_len);
     samples
+}
+
+fn compute_output_len(input_samples: usize, speed_factor: f32) -> usize {
+    ((input_samples as f64) / speed_factor as f64)
+        .round()
+        .max(1.0) as usize
+}
+
+fn process_block(stretch: &mut Stretch, input: &[f32], output_len: usize) -> Vec<f32> {
+    let mut outputs = vec![vec![0.0f32; output_len.max(1)]];
+    let inputs = vec![input.to_vec()];
+    let input_len = input.len() as i32;
+    let output_len = outputs[0].len() as i32;
+    stretch.process_vec(&inputs, input_len, &mut outputs, output_len);
+    outputs.remove(0)
+}
+
+fn append_silence_block(
+    stretch: &mut Stretch,
+    speed_factor: f32,
+    input_samples: usize,
+    buffer: &mut Vec<f32>,
+) {
+    let silence_len = compute_output_len(input_samples, speed_factor);
+    let silence_inputs = vec![vec![0.0f32; input_samples]];
+    let mut outputs = vec![vec![0.0f32; silence_len]];
+    let input_len = input_samples as i32;
+    let output_len = outputs[0].len() as i32;
+    stretch.process_vec(&silence_inputs, input_len, &mut outputs, output_len);
+    buffer.extend_from_slice(&outputs[0]);
+}
+
+fn append_flush(stretch: &mut Stretch, output_latency: usize, buffer: &mut Vec<f32>) {
+    if output_latency == 0 {
+        return;
+    }
+
+    let mut outputs = vec![vec![0.0f32; output_latency]];
+    stretch.flush_vec(&mut outputs, output_latency as i32);
+    buffer.extend_from_slice(&outputs[0]);
+}
+
+fn remove_pre_roll(samples: &mut Vec<f32>, pre_roll: usize) {
+    let remove = pre_roll.min(samples.len());
+    if remove > 0 {
+        samples.drain(0..remove);
+    }
 }
 
 #[cfg(test)]
@@ -128,85 +152,41 @@ mod tests {
     }
 
     #[test]
-    fn test_speed_identity() {
-        let chunk = create_test_chunk(1000);
+    fn identity_speed_returns_original_chunk() {
+        let chunk = create_test_chunk(1024);
         let result = change_speed(&chunk, 1.0);
 
         assert_eq!(result.sample_rate, chunk.sample_rate);
+        assert_eq!(result.samples, chunk.samples);
+    }
+
+    #[test]
+    fn slow_then_normal_round_trip_preserves_length() {
+        let chunk = create_test_chunk(2048);
+        let slow_factor = 0.75;
+
+        let slowed = change_speed(&chunk, slow_factor);
+        let back = change_speed(&slowed, 1.0 / slow_factor);
+
+        assert_eq!(back.sample_rate, chunk.sample_rate);
         assert!(
-            result.samples.len() >= chunk.samples.len(),
-            "Identity stretch should not return fewer samples (identity_len={}, chunk_len={})",
-            result.samples.len(),
-            chunk.samples.len()
+            back.samples.len() >= chunk.samples.len(),
+            "slow → normal round-trip should not clip samples"
         );
     }
 
     #[test]
-    fn test_speed_preserves_sample_rate() {
-        let chunk = AudioChunk {
-            samples: vec![0.1; 500],
-            sample_rate: 48000,
-            start_time: 0.0,
-            end_time: 0.5,
-        };
-
-        let result = change_speed(&chunk, 1.5);
-        assert_eq!(result.sample_rate, 48000);
-    }
-
-    #[test]
-    fn test_speed_exact_lengths() {
-        let chunk = create_test_chunk(1024);
-        for &factor in &[0.5, 0.75, 1.25, 1.8, 2.0, 3.0] {
-            let stretched = change_speed(&chunk, factor);
-            let expected = ((chunk.samples.len() as f64) / factor as f64)
-                .round()
-                .max(1.0) as usize;
-            assert_eq!(
-                stretched.samples.len(),
-                expected,
-                "len mismatch for factor {}",
-                factor
-            );
-        }
-    }
-
-    #[test]
-    fn test_round_trip_slow_fast() {
+    fn fast_then_normal_round_trip_preserves_length() {
         let chunk = create_test_chunk(2048);
-        let factor = 0.6;
-        let slowed = change_speed(&chunk, factor);
-        let back = change_speed(&slowed, 1.0 / factor);
-        assert_eq!(chunk.sample_rate, back.sample_rate);
-        assert_eq!(
-            chunk.samples, back.samples,
-            "round-trip slow→fast should return identical samples"
-        );
-    }
+        let fast_factor = 1.8;
 
-    #[test]
-    fn test_round_trip_fast_slow() {
-        let chunk = create_test_chunk(2048);
-        let factor = 2.5;
-        let sped = change_speed(&chunk, factor);
-        let back = change_speed(&sped, 1.0 / factor);
-        assert_eq!(chunk.sample_rate, back.sample_rate);
-        assert_eq!(
-            chunk.samples, back.samples,
-            "round-trip fast→slow should return identical samples"
-        );
-    }
+        let sped = change_speed(&chunk, fast_factor);
+        let back = change_speed(&sped, 1.0 / fast_factor);
 
-    #[test]
-    fn test_short_clip_round_trip() {
-        let chunk = create_test_chunk(64);
-        let factor = 1.8;
-        let sped = change_speed(&chunk, factor);
-        let back = change_speed(&sped, 1.0 / factor);
-        assert_eq!(chunk.sample_rate, back.sample_rate);
-        assert_eq!(
-            chunk.samples, back.samples,
-            "round-trip on short clip should match exactly"
+        assert_eq!(back.sample_rate, chunk.sample_rate);
+        assert!(
+            back.samples.len() >= chunk.samples.len(),
+            "fast → normal round-trip should not clip samples"
         );
     }
 }

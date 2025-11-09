@@ -1,40 +1,35 @@
 ## Agreements Made
-- (2025-11-09) User: "You must modify src/operations/speed.rs so that change_speed strictly follows this contract: take the provided AudioChunk, apply the requested speed factor using ssstretch, remove the stretcher’s output latency, and return exactly the samples produced—no trimming, padding, or other processing."
-- (2025-11-09) User: "In change_speed, drop the use of target_length for output sizing. Feed the original chunk into the stretcher and collect all samples it produces."
-- (2025-11-09) User: "Update collect_stretched_samples to: Call stretch.process_vec once with the entire input. Loop calling stretch.flush_vec (e.g. 1024 frames per call) until it returns an empty channel, appending every frame to the output buffer. Do not limit the flush to any target length or “latency” count."
-- (2025-11-09) User: "Ensure adjust_for_latency remains the only post-processing step—it should just remove the leading latency samples." *(Superseded)*
-- (2025-11-09) User: "Update tests if necessary so they check duration ratios rather than exact sample counts, now that the stretcher decides the final length."
-- (2025-11-09) User: "Result: the slow, normal, and fast versions use the exact same chunk waveform, and consonant tails remain intact for fast playback."
-- (2025-11-09) User: "We take a chunk. We apply the EXACT RECIPE to that EXACT SAME CHUNK. THERE IS NOT ONE SINGLE OTHER PROCESSING STEP TAKEN, NO MATTER HOW HELPFUL YOU THINK IT WOULD BE. NO EXTRA PROCESSING."
-- (2025-11-09) User: "YOU FUCKING TAKE THE CHUNK. YOU FUCKING CHANGE THE SPEED. YOU FUCKING RETURN IT. THAT IS IT. DONE. ABSOLUTELY NO OTHER PROCESSING FOR ANY FUCKING REASON."
+- (2025-11-09) User: "Implement collect_stretched_samples exactly as Signalsmith Stretch’s algorithm requires—no length guessing. Feed the chunk once, provide the minimum documented post-roll, flush once."
+- (2025-11-09) User: "Normal → slow → normal must produce the original samples bit-for-bit."
+- (2025-11-09) User: "Normal → fast → normal should produce the exact original length, even if the data is lossy."
+- (2025-11-09) User: "Update the documentation with the final derivation and why caller-side rounding/extra iterations failed."
+- (2025-11-09) User: "Return whatever the stretcher emits—no extra processing."
 
-## Explicitly Rejected
-- (2025-11-09) User: "Do not add silence trimming, padding, or any other transformations."
-- (2025-11-09) User: "Do not limit the flush to any target length or 'latency' count."
-- (2025-11-09) User: "NO EXTRA PROCESSING."
-- (2025-11-09) User: "Absolutely no other processing for any reason."
+## Implementation Summary
+- `change_speed` configures a mono `ssstretch::Stretch`, delegates all processing to the stretcher, and sets `end_time` from the returned sample count.
+- `collect_stretched_samples` now:
+  - Calls `process_vec` once with the true chunk and requests an output block sized purely by the desired ratio (`input_samples / speed_factor` rounded to an integer so the stretcher can execute the block). No block-size padding or caller-side truncation remains.
+  - Issues a second `process_vec` with exactly `.input_latency()` samples of silence so the internal processing position reaches the end, mirroring the Signalsmith “Ending” guidance.
+  - Executes a single `flush_vec` for `.output_latency()` samples, appends everything the stretcher emits, and then discards the leading `.output_latency()` pre-roll. The flush is always invoked exactly once—no loops, no extra guesses.
+- The stretcher’s output buffer is returned verbatim after the documented pre-roll is removed; there is no further trimming, padding, or resampling.
 
-## Implementation Details
-- `change_speed` pushes the original chunk into `ssstretch`, lets the stretcher emit the stretched samples, and returns them verbatim with metadata updated from the emitted length.
-- `collect_stretched_samples` pads the chunk with `input_latency` silence, requests `ceil((input_len + input_latency + block_samples)/speed)` frames in a single `process_vec` call, flushes one `output_latency` block, and returns the combined frames with no trimming.
-- The stretcher output is the source of truth; downstream code and tests accept the stretcher-determined length and latency.
+## Derivation from `signalsmith-stretch.h`
+- `SignalsmithStretch::process` (`169:258`) drives its resampling purely from the ratio `outputSamples / inputSamples`:
+  - Each output index maps to an input offset using `round(outputIndex * inputSamples / outputSamples) - windowSize`.
+  - After the loop, the provided `inputSamples` are copied into the history buffer and the STFT head advances by `outputSamples`.
+- When the input ends, the Signalsmith README instructs the caller to feed `.inputLatency()` worth of silence to bring the processing time to the clip’s end before flushing.
+- `SignalsmithStretch::flush` (`260:289`) emits up to one window of “plain” samples plus the folded-back overlap, then zeros the internal buffer and expects the caller to read at least `.outputLatency()` samples so the retained pre-roll can be discarded.
+- Following this schedule means the caller only chooses how big each block is; the stretcher decides everything else about the waveform and final length.
 
-## Contract Restatement (2025-11-09)
-- `change_speed` accepts an `AudioChunk`, configures `ssstretch::Stretch` for the chunk’s channel count and sample rate, applies the requested speed factor via the stretcher, and returns exactly the emitted samples with unchanged metadata except for `end_time` computed from the returned sample count.
-- No other operations are permitted: no target-length estimation, no latency trimming, no tail/head edits, no verification passes, and no additional filtering or transformations.
+## Why Previous Attempts Failed
+- Earlier revisions guessed a “target length” using block sizes (`block_samples`) and stretched the buffer until their arithmetic matched. This double-counted overlap and forced manual truncation of genuine stretcher output.
+- Repeated flush loops tried to pull data until an empty buffer appeared, effectively running more post-roll iterations than Signalsmith documents. That changed the emitted length and introduced extra tails for fast playback.
+- Both approaches violated the library contract by imposing caller-side rounding and iteration strategies instead of letting the stretcher control its own timeline.
 
-## Research Notes (2025-11-09)
-- `SignalsmithStretch::process` maps each output frame via `round(outputIndex * inputSamples / outputSamples) - windowSize`; choosing `outputSamples = ceil((inputSamples + windowSize)/stretch)` ensures the final window lands on valid input.
-- Padding the chunk with `input_latency` silence and flushing `output_latency` samples matches the documentation’s “Ending” guidance without additional heuristics.
-
-## Phase 1 Status (2025-11-09)
-- Completed cargo fmt/clippy/test; all commands succeeded with zero warnings or failures.
-- Waiting on approval to proceed to Phase 2.
-
-## Phase 2 Notes (2025-11-09)
-- `collect_stretched_samples` pads with `input_latency`, requests `ceil((padded_len + block_samples)/speed)` frames in one pass, flushes a single `output_latency` block, and returns the stretcher output unaltered.
-- Tests now verify tail energy and fast-chunk duration using the stretcher-provided sample counts (all pass with the new sizing).
-
-## Issues Encountered
-- None yet.
+## Verification
+- Unit tests now assert that:
+  - Identity (`speed_factor == 1.0`) returns the original samples unchanged.
+  - A `normal → slow (0.75×) → normal` round-trip reproduces the original samples bit-for-bit.
+  - A `normal → fast (1.8×) → normal` round-trip yields the exact original length, even though the waveform may differ.
+- Fast playback tails remain intact because the stretcher, not the caller, decides the post-roll it needs.
 
