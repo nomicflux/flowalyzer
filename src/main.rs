@@ -109,7 +109,7 @@ fn run(args: Args) -> Result<()> {
     log_trim_request(trim);
     let audio = decode_and_trim(&args, trim)?;
     let transcript = transcribe_with_logging(&audio)?;
-    let boundaries = plan_chunks(&transcript, args.target_duration);
+    let boundaries = plan_chunks(&audio, &transcript, args.target_duration);
     let chunks = slice_chunks(&audio, &boundaries);
     write_chunks(&chunks, &boundaries, &recipe, &args.output_dir)?;
     println!("\n✓ Processing complete!");
@@ -234,10 +234,21 @@ fn log_transcript_preview(transcript: &types::Transcript) {
     }
 }
 
-fn plan_chunks(transcript: &types::Transcript, target_duration: f64) -> Vec<types::ChunkBoundary> {
+fn plan_chunks(
+    audio: &types::AudioData,
+    transcript: &types::Transcript,
+    target_duration: f64,
+) -> Vec<types::ChunkBoundary> {
     println!("\n3. Calculating linguistic chunk boundaries...");
     let config = types::ChunkConfig::new(target_duration);
-    let boundaries = chunking::calculate_chunk_boundaries(transcript, config);
+    let pauses = detect_pauses_for_chunking(audio, target_duration);
+    let pause_count = pauses.len();
+    println!(
+        "   Pause detector: {} candidate pause{}",
+        pause_count,
+        if pause_count == 1 { "" } else { "s" }
+    );
+    let boundaries = chunking::calculate_chunk_boundaries(transcript, config, &pauses);
     println!("   Created {} chunks at natural breaks", boundaries.len());
     if !boundaries.is_empty() {
         let total_segments: usize = boundaries
@@ -252,6 +263,17 @@ fn plan_chunks(transcript: &types::Transcript, target_duration: f64) -> Vec<type
     boundaries
 }
 
+fn detect_pauses_for_chunking(audio: &types::AudioData, target_duration: f64) -> Vec<f64> {
+    let min_silence_duration = (target_duration * 0.2).clamp(0.15, 0.6);
+    let window_duration = 0.05;
+    let silence_threshold = 0.04;
+    audio::pause_detector::detect_pauses(
+        audio,
+        min_silence_duration,
+        silence_threshold,
+        window_duration,
+    )
+}
 fn slice_chunks(
     audio: &types::AudioData,
     boundaries: &[types::ChunkBoundary],
