@@ -18,8 +18,8 @@ pub struct TranscriptionSettings {
 
 impl Default for TranscriptionSettings {
     fn default() -> Self {
-        let model_path =
-            std::env::var("WHISPER_MODEL_PATH").unwrap_or_else(|_| "./models/ggml-base.bin".to_string());
+        let model_path = std::env::var("WHISPER_MODEL_PATH")
+            .unwrap_or_else(|_| "./models/ggml-base.bin".to_string());
         let mut settings = Self {
             model_path,
             language: None,

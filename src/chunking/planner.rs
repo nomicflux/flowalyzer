@@ -5,7 +5,7 @@ use super::spans::build_spans;
 
 /// Pure function to determine chunk boundaries from transcript
 /// Tries to create chunks close to target duration by combining segments
-pub(crate) fn calculate_chunk_boundaries(
+pub fn calculate_chunk_boundaries(
     transcript: &Transcript,
     config: ChunkConfig,
     pauses: &[f64],

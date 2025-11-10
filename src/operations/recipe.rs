@@ -25,10 +25,15 @@ use crate::types::{AudioChunk, Recipe};
 ///
 /// # Example
 /// ```
-/// use flowalyzer::types::{AudioChunk, Recipe};
 /// use flowalyzer::operations::recipe::apply_recipe;
+/// use flowalyzer::types::{AudioChunk, Recipe, RecipeStep};
 ///
-/// let chunk = AudioChunk { /* ... */ };
+/// let chunk = AudioChunk {
+///     samples: vec![0.0; 16_000],
+///     sample_rate: 16_000,
+///     start_time: 0.0,
+///     end_time: 1.0,
+/// };
 /// let recipe = Recipe::new("example")
 ///     .add_step(RecipeStep {
 ///         repeat_count: 3,

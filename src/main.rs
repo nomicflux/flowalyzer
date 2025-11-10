@@ -1,11 +1,6 @@
-mod audio;
-mod chunking;
-mod operations;
-mod transcription;
-mod types;
-
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::Parser;
+use flowalyzer::{audio, chunking, operations, transcription, types};
 use std::path::PathBuf;
 use std::{fs, path::Path};
 use transcription::TranscriptionSettings;
@@ -236,8 +231,8 @@ fn transcribe_with_logging(
     settings: &TranscriptionSettings,
 ) -> Result<types::Transcript> {
     println!("\n2. Transcribing audio with Whisper...");
-    let transcript = transcription::transcribe_audio(audio, settings)
-        .context("Failed to transcribe audio")?;
+    let transcript =
+        transcription::transcribe_audio(audio, settings).context("Failed to transcribe audio")?;
     println!("   Found {} segments", transcript.segments.len());
     log_transcript_preview(&transcript);
     Ok(transcript)
@@ -258,9 +253,7 @@ fn log_transcript_preview(transcript: &types::Transcript) {
         .segments
         .iter()
         .take(3)
-        .map(|segment| {
-            format_preview_text(&segment.text)
-        })
+        .map(|segment| format_preview_text(&segment.text))
         .collect();
     if preview.is_empty() {
         println!(
@@ -284,10 +277,7 @@ fn format_preview_text(text: &str) -> String {
         return sanitized;
     }
     let mut chars = sanitized.chars();
-    let mut preview: String = chars
-        .by_ref()
-        .take(PREVIEW_CHAR_LIMIT)
-        .collect();
+    let mut preview: String = chars.by_ref().take(PREVIEW_CHAR_LIMIT).collect();
     if chars.next().is_some() {
         preview.push('…');
     }
