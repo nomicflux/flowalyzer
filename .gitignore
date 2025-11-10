@@ -6,3 +6,4 @@ vendor/
 .claude/
 .cursor/
 models/
+.env

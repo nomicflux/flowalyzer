@@ -8,6 +8,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 use std::{fs, path::Path};
+use transcription::TranscriptionSettings;
 
 /// Flowalyzer - Audio chunking and manipulation tool
 ///
@@ -45,6 +46,14 @@ struct Args {
     /// Optional trim end time (seconds or HH:MM:SS.mmm)
     #[arg(long, value_name = "TIME")]
     end: Option<String>,
+
+    /// Path to Whisper GGML model (defaults to ./models/ggml-base.bin or WHISPER_MODEL_PATH)
+    #[arg(long, value_name = "PATH")]
+    whisper_model: Option<PathBuf>,
+
+    /// Override language detection with an explicit language code (e.g., 'es')
+    #[arg(long, value_name = "LANG")]
+    whisper_language: Option<String>,
 }
 
 impl Args {
@@ -93,6 +102,28 @@ impl Args {
 
         Ok((start, end))
     }
+
+    fn transcription_settings(&self) -> Result<TranscriptionSettings> {
+        let mut settings = TranscriptionSettings::default();
+
+        if let Some(model) = &self.whisper_model {
+            settings.model_path = model.to_string_lossy().into_owned();
+        }
+
+        if let Some(language) = &self.whisper_language {
+            let trimmed = language.trim();
+            ensure!(
+                !trimmed.is_empty(),
+                "Whisper language override must not be empty"
+            );
+            settings.language = Some(trimmed.to_string());
+            settings.detect_language = false;
+        }
+
+        settings.apply_model_defaults();
+
+        Ok(settings)
+    }
 }
 
 fn main() -> Result<()> {
@@ -102,13 +133,14 @@ fn main() -> Result<()> {
 fn run(args: Args) -> Result<()> {
     args.validate()
         .context("Failed to validate command-line arguments")?;
-    print_banner(&args);
+    let transcription_settings = args.transcription_settings()?;
+    print_banner(&args, &transcription_settings);
     let recipe = load_recipe(&args)?;
     log_recipe(&recipe);
     let trim = args.trim_range()?;
     log_trim_request(trim);
     let audio = decode_and_trim(&args, trim)?;
-    let transcript = transcribe_with_logging(&audio)?;
+    let transcript = transcribe_with_logging(&audio, &transcription_settings)?;
     let boundaries = plan_chunks(&audio, &transcript, args.target_duration);
     let chunks = slice_chunks(&audio, &boundaries);
     write_chunks(&chunks, &boundaries, &recipe, &args.output_dir)?;
@@ -116,11 +148,24 @@ fn run(args: Args) -> Result<()> {
     Ok(())
 }
 
-fn print_banner(args: &Args) {
+fn print_banner(args: &Args, settings: &TranscriptionSettings) {
     println!("Flowalyzer v0.1.0 - Language Learning Audio Processor");
     println!("Input:  {:?}", args.input_file);
     println!("Output dir: {:?}", args.output_dir);
     println!("Target chunk duration: {} seconds", args.target_duration);
+    println!("Whisper model: {}", settings.model_path);
+    if settings.is_english_only_model()
+        && settings.language.as_deref() == Some("en")
+        && !settings.detect_language
+    {
+        println!("Whisper language: English (model is English-only; detection disabled)");
+    } else {
+        match (&settings.language, settings.detect_language) {
+            (Some(language), _) => println!("Whisper language override: {}", language),
+            (None, true) => println!("Whisper language detection: enabled"),
+            (None, false) => println!("Whisper language detection: disabled"),
+        }
+    }
 }
 
 fn load_recipe(args: &Args) -> Result<types::Recipe> {
@@ -186,10 +231,13 @@ fn decode_and_trim(args: &Args, trim: (Option<f64>, Option<f64>)) -> Result<type
     Ok(decoded)
 }
 
-fn transcribe_with_logging(audio: &types::AudioData) -> Result<types::Transcript> {
+fn transcribe_with_logging(
+    audio: &types::AudioData,
+    settings: &TranscriptionSettings,
+) -> Result<types::Transcript> {
     println!("\n2. Transcribing audio with Whisper...");
-    let transcript =
-        transcription::transcribe_audio(audio).context("Failed to transcribe audio")?;
+    let transcript = transcription::transcribe_audio(audio, settings)
+        .context("Failed to transcribe audio")?;
     println!("   Found {} segments", transcript.segments.len());
     log_transcript_preview(&transcript);
     Ok(transcript)
@@ -211,12 +259,7 @@ fn log_transcript_preview(transcript: &types::Transcript) {
         .iter()
         .take(3)
         .map(|segment| {
-            let mut text = segment.text.trim().replace('\n', " ");
-            if text.len() > 40 {
-                text.truncate(40);
-                text.push('…');
-            }
-            text
+            format_preview_text(&segment.text)
         })
         .collect();
     if preview.is_empty() {
@@ -232,6 +275,23 @@ fn log_transcript_preview(transcript: &types::Transcript) {
             preview.join(" | ")
         );
     }
+}
+
+fn format_preview_text(text: &str) -> String {
+    const PREVIEW_CHAR_LIMIT: usize = 40;
+    let sanitized = text.trim().replace('\n', " ");
+    if sanitized.is_empty() {
+        return sanitized;
+    }
+    let mut chars = sanitized.chars();
+    let mut preview: String = chars
+        .by_ref()
+        .take(PREVIEW_CHAR_LIMIT)
+        .collect();
+    if chars.next().is_some() {
+        preview.push('…');
+    }
+    preview
 }
 
 fn plan_chunks(
@@ -496,8 +556,89 @@ mod tests {
             recipe_file: None,
             start: None,
             end: None,
+            whisper_model: None,
+            whisper_language: None,
         };
 
         assert_eq!(args.target_duration, 2.0);
+    }
+
+    #[test]
+    fn transcription_settings_defaults_enable_detection() {
+        let args = Args {
+            input_file: PathBuf::from("test.wav"),
+            output_dir: PathBuf::from("output"),
+            target_duration: 2.0,
+            recipe_json: Some("{}".to_string()),
+            recipe_file: None,
+            start: None,
+            end: None,
+            whisper_model: None,
+            whisper_language: None,
+        };
+
+        let settings = args.transcription_settings().unwrap();
+        assert!(settings.detect_language);
+        assert!(settings.language.is_none());
+    }
+
+    #[test]
+    fn transcription_settings_with_language_disables_detection() {
+        let args = Args {
+            input_file: PathBuf::from("test.wav"),
+            output_dir: PathBuf::from("output"),
+            target_duration: 2.0,
+            recipe_json: Some("{}".to_string()),
+            recipe_file: None,
+            start: None,
+            end: None,
+            whisper_model: Some(PathBuf::from("/tmp/whisper.bin")),
+            whisper_language: Some("es".to_string()),
+        };
+
+        let settings = args.transcription_settings().unwrap();
+        assert_eq!(settings.model_path, "/tmp/whisper.bin");
+        assert_eq!(settings.language.as_deref(), Some("es"));
+        assert!(!settings.detect_language);
+    }
+
+    #[test]
+    fn transcription_settings_force_english_for_english_only_models() {
+        let args = Args {
+            input_file: PathBuf::from("test.wav"),
+            output_dir: PathBuf::from("output"),
+            target_duration: 2.0,
+            recipe_json: Some("{}".to_string()),
+            recipe_file: None,
+            start: None,
+            end: None,
+            whisper_model: Some(PathBuf::from("/tmp/ggml-base.en.bin")),
+            whisper_language: None,
+        };
+
+        let settings = args.transcription_settings().unwrap();
+        assert_eq!(settings.model_path, "/tmp/ggml-base.en.bin");
+        assert_eq!(settings.language.as_deref(), Some("en"));
+        assert!(!settings.detect_language);
+    }
+
+    #[test]
+    fn preview_text_leaves_short_strings() {
+        let preview = format_preview_text("Hello world");
+        assert_eq!(preview, "Hello world");
+    }
+
+    #[test]
+    fn preview_text_handles_newlines() {
+        let preview = format_preview_text("Hello\nWorld");
+        assert_eq!(preview, "Hello World");
+    }
+
+    #[test]
+    fn preview_text_truncates_utf8_safely() {
+        let input = "مرحبا".repeat(12); // 12 * 5 = 60 chars
+        let preview = format_preview_text(&input);
+        assert!(preview.ends_with('…'));
+        assert!(preview.chars().count() <= 41);
     }
 }

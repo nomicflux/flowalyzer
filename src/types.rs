@@ -47,19 +47,16 @@ pub struct ChunkBoundary {
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkConfig {
     pub target_duration: f64, // target chunk duration in seconds
-    pub min_duration: f64,    // minimum acceptable duration
     pub max_duration: f64,    // maximum acceptable duration
     pub max_overshoot: f64,   // additional allowable overshoot beyond max_duration
 }
 
 impl ChunkConfig {
     pub fn new(target_duration: f64) -> Self {
-        let min_duration = target_duration * 0.5; // 50% of target
         let max_duration = target_duration * 1.5; // 150% of target
         let max_overshoot = target_duration * 0.3; // allow up to +30% if needed
         Self {
             target_duration,
-            min_duration,
             max_duration,
             max_overshoot,
         }

@@ -26,9 +26,23 @@ impl ChunkAccumulator {
         if self.split_if_excessive(span, config) {
             return;
         }
-        self.make_room_for(span, config);
+        // If current chunk has reached target, finalize it before adding new span
+        if !self.current_segments.is_empty() && self.duration() >= config.target_duration {
+            self.finish_chunk();
+        }
+        // If adding this span would exceed max, finalize current chunk first
+        if !self.current_segments.is_empty() {
+            let potential_duration = span.end_time - self.current_start;
+            let max_allowed = config.max_duration + config.max_overshoot;
+            if potential_duration > max_allowed {
+                self.finish_chunk();
+            }
+        }
         self.attach_span(span);
-        self.finalize_if_ready(config.min_duration);
+        // Check if we've reached target after adding the span
+        if self.duration() >= config.target_duration {
+            self.finish_chunk();
+        }
     }
 
     pub(super) fn finish_chunk(&mut self) {
@@ -67,22 +81,6 @@ impl ChunkAccumulator {
         true
     }
 
-    fn make_room_for(&mut self, span: Span, config: ChunkConfig) {
-        if self.current_segments.is_empty() {
-            return;
-        }
-        let potential_duration = span.end_time - self.current_start;
-        if potential_duration <= config.max_duration {
-            return;
-        }
-        let max_allowed = config.max_duration + config.max_overshoot;
-        if potential_duration <= max_allowed {
-            return;
-        }
-        self.finish_chunk();
-        self.reset_to(span.start_time);
-    }
-
     fn attach_span(&mut self, span: Span) {
         if self.current_segments.is_empty() {
             self.current_start = span.start_time;
@@ -91,12 +89,6 @@ impl ChunkAccumulator {
             self.current_segments.push(span.segment_idx);
         }
         self.current_end = span.end_time;
-    }
-
-    fn finalize_if_ready(&mut self, min_duration: f64) {
-        if self.duration() >= min_duration {
-            self.finish_chunk();
-        }
     }
 
     fn reset_to(&mut self, start: f64) {
