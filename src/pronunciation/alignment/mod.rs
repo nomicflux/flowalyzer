@@ -1,18 +1,26 @@
 use std::time::Duration;
 
-use ndarray::Array1;
+use ndarray::ArrayView1;
 
 use crate::pronunciation::{
-    AlignedPhoneme, AlignmentReport, PronunciationError, PronunciationFeatures, Result,
+    AlignedPhoneme, AlignmentReport, AlignmentWeights, PronunciationError, PronunciationFeatures,
+    Result,
 };
 
-/// Audio-only alignment placeholder that compares coarse spectral statistics.
-#[derive(Debug, Default)]
-pub struct AudioAligner;
+#[derive(Debug)]
+pub struct AudioAligner {
+    warp_band: usize,
+    segment_frames: usize,
+    weights: AlignmentWeights,
+}
 
 impl AudioAligner {
-    pub fn new() -> Self {
-        Self
+    pub fn new(weights: AlignmentWeights) -> Self {
+        Self {
+            warp_band: DEFAULT_WARP_BAND,
+            segment_frames: DEFAULT_SEGMENT_FRAMES,
+            weights,
+        }
     }
 
     pub fn align(
@@ -21,73 +29,28 @@ impl AudioAligner {
         learner: &PronunciationFeatures,
     ) -> Result<AlignmentReport> {
         ensure_features(reference, learner)?;
-        let segment_frames = SEGMENT_FRAMES.min(reference.frame_count.max(1));
-        let total_frames = reference.frame_count.min(learner.frame_count);
-
-        let mut phonemes = Vec::new();
-        let mut running_similarity = 0.0;
-        let mut running_articulation = 0.0;
-        let mut running_timing_delta = 0.0;
-
-        let ref_energy = slice(&reference.energy)?;
-        let learn_energy = slice(&learner.energy)?;
-        let ref_flux = slice(&reference.spectral_flux)?;
-        let learn_flux = slice(&learner.spectral_flux)?;
-
-        let mut frame = 0;
-        while frame < total_frames {
-            let start = frame;
-            let end = (frame + segment_frames).min(total_frames);
-            let stats = SegmentStats::compute(
-                reference,
-                learner,
-                ref_energy,
-                learn_energy,
-                ref_flux,
-                learn_flux,
-                start,
-                end,
-            );
-
-            let reference_start_ms = frame_to_ms(start);
-            let reference_end_ms = frame_to_ms(end);
-            let learner_start_ms = (reference_start_ms + stats.timing_delta_ms).max(0.0);
-            let learner_end_ms = (reference_end_ms + stats.timing_delta_ms).max(0.0);
-
-            phonemes.push(AlignedPhoneme {
-                symbol: format!("#{}", phonemes.len() + 1),
-                reference_start_ms,
-                reference_end_ms,
-                learner_start_ms,
-                learner_end_ms,
-                timing_delta_ms: stats.timing_delta_ms,
-                similarity: stats.similarity,
-                articulation_variance: stats.articulation_variance,
-            });
-
-            running_similarity += stats.similarity;
-            running_articulation += stats.articulation_variance;
-            running_timing_delta += stats.timing_delta_ms;
-            frame = end;
-        }
-
-        let duration_ms = frame_to_ms(total_frames).max(0.0);
-        let segment_count = phonemes.len().max(1) as f32;
-        let confidence = (running_similarity / segment_count).clamp(0.0, 1.0);
-
+        let score_grid = build_cost_grid(reference, learner, self.warp_band, &self.weights);
+        let path = trace_optimal_path(&score_grid)?;
+        let segments =
+            summarise_segments(reference, learner, &path, self.segment_frames, &score_grid)?;
         Ok(AlignmentReport {
-            phonemes,
-            total_duration: Duration::from_millis(duration_ms.round() as u64),
-            reference_path_cost: running_articulation,
-            learner_path_cost: running_articulation,
-            global_time_offset_ms: running_timing_delta / segment_count,
-            confidence,
+            phonemes: segments.phonemes,
+            total_duration: Duration::from_millis(frame_to_ms(reference.frame_count).round() as u64),
+            reference_path_cost: segments.total_cost,
+            learner_path_cost: segments.total_cost,
+            global_time_offset_ms: segments.global_offset,
+            confidence: segments.confidence,
+            reference_energy: reference.energy.to_vec(),
+            learner_energy: learner.energy.to_vec(),
+            similarity_band: segments.similarity_band,
         })
     }
 }
 
 const FRAME_HOP_MS: f32 = 10.0;
-const SEGMENT_FRAMES: usize = 12;
+const DEFAULT_WARP_BAND: usize = 20;
+const DEFAULT_SEGMENT_FRAMES: usize = 18;
+const COST_NORMALISER: f32 = 6.0;
 
 fn ensure_features(
     reference: &PronunciationFeatures,
@@ -106,114 +69,381 @@ fn ensure_features(
     Ok(())
 }
 
-fn frame_to_ms(frame: usize) -> f32 {
-    frame as f32 * FRAME_HOP_MS
+fn frame_to_ms(frames: usize) -> f32 {
+    frames as f32 * FRAME_HOP_MS
 }
 
-fn slice(array: &Array1<f32>) -> Result<&[f32]> {
-    array.as_slice().ok_or_else(|| {
-        PronunciationError::new("feature slice is not contiguous; cannot compute alignment stats")
+fn build_cost_grid(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    band: usize,
+    weights: &AlignmentWeights,
+) -> Vec<Vec<Cell>> {
+    let mut grid = vec![vec![Cell::invalid(); learner.frame_count]; reference.frame_count];
+    for row in 0..reference.frame_count {
+        fill_row(reference, learner, band, row, weights, &mut grid);
+    }
+    grid
+}
+
+fn fill_row(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    band: usize,
+    row: usize,
+    weights: &AlignmentWeights,
+    grid: &mut [Vec<Cell>],
+) {
+    let start = row.saturating_sub(band);
+    let end = (row + band + 1).min(learner.frame_count);
+    for col in start..end {
+        let local = frame_cost(reference, learner, row, col, weights);
+        grid[row][col] = update_cell(local, row, col, grid);
+    }
+}
+
+fn update_cell(local: f32, row: usize, col: usize, grid: &[Vec<Cell>]) -> Cell {
+    if row == 0 && col == 0 {
+        return Cell::origin(local);
+    }
+    let mut best = Step::new(f32::INFINITY, Direction::Origin);
+    if row > 0 && col > 0 {
+        best = Step::better(best, grid[row - 1][col - 1], Direction::Diagonal);
+    }
+    if row > 0 {
+        best = Step::better(best, grid[row - 1][col], Direction::Up);
+    }
+    if col > 0 {
+        best = Step::better(best, grid[row][col - 1], Direction::Left);
+    }
+    if !best.cost.is_finite() {
+        return Cell::invalid();
+    }
+    Cell::with_prev(local + best.cost, local, best.direction)
+}
+
+fn frame_cost(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    row: usize,
+    col: usize,
+    weights: &AlignmentWeights,
+) -> f32 {
+    let mfcc = mean_abs(reference.mfcc.row(row), learner.mfcc.row(col));
+    let delta = mean_abs(reference.deltas.row(row), learner.deltas.row(col));
+    let delta_delta = mean_abs(
+        reference.delta_deltas.row(row),
+        learner.delta_deltas.row(col),
+    );
+    let mel = mean_abs(
+        reference.mel_spectrogram.row(row),
+        learner.mel_spectrogram.row(col),
+    );
+    let energy = (reference.energy[row] - learner.energy[col]).abs();
+    let flux = (reference.spectral_flux[row] - learner.spectral_flux[col]).abs();
+    (mfcc * weights.mfcc
+        + delta * weights.delta
+        + delta_delta * weights.delta_delta
+        + mel * weights.mel
+        + energy * weights.energy
+        + flux * weights.flux)
+        .min(COST_NORMALISER)
+}
+
+fn mean_abs(lhs: ArrayView1<'_, f32>, rhs: ArrayView1<'_, f32>) -> f32 {
+    if lhs.is_empty() || rhs.is_empty() {
+        return 0.0;
+    }
+    lhs.iter()
+        .zip(rhs.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum::<f32>()
+        / lhs.len().min(rhs.len()) as f32
+}
+
+fn trace_optimal_path(grid: &[Vec<Cell>]) -> Result<Vec<Point>> {
+    let (mut row, mut col) = terminal_cell(grid)?;
+    let mut path = Vec::new();
+    while row > 0 || col > 0 {
+        path.push(Point {
+            row,
+            col,
+            cost: grid[row][col].local,
+        });
+        match grid[row][col].direction {
+            Direction::Diagonal => {
+                row -= 1;
+                col -= 1;
+            }
+            Direction::Up => row -= 1,
+            Direction::Left => col -= 1,
+            Direction::Origin => break,
+        }
+    }
+    path.push(Point {
+        row: 0,
+        col: 0,
+        cost: grid[0][0].local,
+    });
+    path.reverse();
+    Ok(path)
+}
+
+fn terminal_cell(grid: &[Vec<Cell>]) -> Result<(usize, usize)> {
+    let last_row = grid.len().saturating_sub(1);
+    let last_col = grid
+        .first()
+        .map(|row| row.len().saturating_sub(1))
+        .unwrap_or(0);
+    let mut best = (last_row, last_col, f32::INFINITY);
+    for (col, cell) in grid[last_row].iter().enumerate().take(last_col + 1) {
+        if cell.cost < best.2 {
+            best = (last_row, col, cell.cost);
+        }
+    }
+    for (row, column) in grid.iter().enumerate().take(last_row + 1) {
+        let cost = column[last_col].cost;
+        if cost < best.2 {
+            best = (row, last_col, cost);
+        }
+    }
+    if !best.2.is_finite() {
+        return Err(PronunciationError::new(
+            "alignment path not found within warp band",
+        ));
+    }
+    Ok((best.0, best.1))
+}
+
+fn summarise_segments(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    path: &[Point],
+    segment_frames: usize,
+    grid: &[Vec<Cell>],
+) -> Result<SegmentSummary> {
+    let mut builder = SegmentAccumulator::new(path.len());
+    let mut index = 0;
+    let mut segment_id = 1;
+    while index < path.len() {
+        let end = (index + segment_frames).min(path.len());
+        builder.push(reference, learner, &path[index..end], segment_id)?;
+        index = end;
+        segment_id += 1;
+    }
+    Ok(builder.finish(grid))
+}
+
+fn segment_metrics(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    segment: &[Point],
+) -> Result<SegmentMetrics> {
+    let mut timing_delta = 0.0;
+    let mut similarity = 0.0;
+    let mut articulation = 0.0;
+    for point in segment {
+        timing_delta += frame_delta(point.row, point.col);
+        similarity += 1.0 - (point.cost / COST_NORMALISER).min(1.0);
+        articulation += flux_delta(reference, learner, point.row, point.col)?;
+    }
+    let length = segment.len() as f32;
+    Ok(SegmentMetrics {
+        timing_delta: timing_delta / length,
+        similarity: (similarity / length).clamp(0.0, 1.0),
+        articulation: (articulation / length).clamp(0.0, 1.0),
+        cost: segment.iter().map(|p| p.cost).sum::<f32>() / length,
     })
 }
 
-struct SegmentStats {
-    similarity: f32,
-    articulation_variance: f32,
-    timing_delta_ms: f32,
-}
-
-impl SegmentStats {
-    #[allow(clippy::too_many_arguments)]
-    fn compute(
-        reference: &PronunciationFeatures,
-        learner: &PronunciationFeatures,
-        ref_energy: &[f32],
-        learn_energy: &[f32],
-        ref_flux: &[f32],
-        learn_flux: &[f32],
-        start: usize,
-        end: usize,
-    ) -> Self {
-        let mfcc_similarity =
-            average_mfcc_similarity(reference, learner, start, end).unwrap_or(0.0);
-        let flux_variance = average_abs_difference(ref_flux, learn_flux, start, end);
-        let timing_delta_ms =
-            peak_timing_delta(ref_energy, learn_energy, start, end) * FRAME_HOP_MS;
-
-        Self {
-            similarity: mfcc_similarity,
-            articulation_variance: flux_variance,
-            timing_delta_ms,
-        }
+fn build_segment_phoneme(
+    segment: &[Point],
+    stats: &SegmentMetrics,
+    segment_id: usize,
+) -> AlignedPhoneme {
+    let first = segment.first().unwrap();
+    let last = segment.last().unwrap();
+    AlignedPhoneme {
+        symbol: format!("S{}", segment_id),
+        reference_start_ms: frame_to_ms(first.row),
+        reference_end_ms: frame_to_ms(last.row + 1),
+        learner_start_ms: frame_to_ms(first.col),
+        learner_end_ms: frame_to_ms(last.col + 1),
+        timing_delta_ms: stats.timing_delta,
+        similarity: stats.similarity,
+        articulation_variance: stats.articulation,
     }
 }
 
-fn average_mfcc_similarity(
+fn frame_delta(reference_frame: usize, learner_frame: usize) -> f32 {
+    (learner_frame as i32 - reference_frame as i32) as f32 * FRAME_HOP_MS
+}
+
+fn flux_delta(
     reference: &PronunciationFeatures,
     learner: &PronunciationFeatures,
-    start: usize,
-    end: usize,
-) -> Option<f32> {
-    let frame_span = end.checked_sub(start)?;
-    if frame_span == 0 {
-        return None;
-    }
-
-    let mut total_distance = 0.0;
-    for frame in start..end {
-        let ref_row = reference.mfcc.row(frame);
-        let learn_row = learner.mfcc.row(frame);
-        let coeffs = ref_row.len().min(learn_row.len());
-        if coeffs == 0 {
-            continue;
-        }
-        let distance: f32 = ref_row
-            .iter()
-            .zip(learn_row.iter())
-            .take(coeffs)
-            .map(|(a, b)| (a - b).abs())
-            .sum::<f32>()
-            / coeffs as f32;
-        total_distance += distance;
-    }
-
-    let mean_distance = total_distance / frame_span as f32;
-    Some((1.0 / (1.0 + mean_distance)).clamp(0.0, 1.0))
+    row: usize,
+    col: usize,
+) -> Result<f32> {
+    let ref_flux = reference
+        .spectral_flux
+        .get(row)
+        .ok_or_else(|| PronunciationError::new("spectral flux row out of bounds"))?;
+    let learner_flux = learner
+        .spectral_flux
+        .get(col)
+        .ok_or_else(|| PronunciationError::new("spectral flux column out of bounds"))?;
+    Ok((ref_flux - learner_flux).abs())
 }
 
-fn average_abs_difference(data_a: &[f32], data_b: &[f32], start: usize, end: usize) -> f32 {
-    let span = end.saturating_sub(start);
-    if span == 0 {
-        return 0.0;
-    }
+fn confidence_from_cost(grid: &[Vec<Cell>]) -> f32 {
     let mut total = 0.0;
-    for idx in start..end {
-        total += (data_a.get(idx).copied().unwrap_or_default()
-            - data_b.get(idx).copied().unwrap_or_default())
-        .abs();
-    }
-    (total / span as f32).min(1.0)
-}
-
-fn peak_timing_delta(ref_energy: &[f32], learn_energy: &[f32], start: usize, end: usize) -> f32 {
-    let span = end.saturating_sub(start);
-    if span == 0 {
-        return 0.0;
-    }
-    let ref_peak = peak_index(ref_energy, start, end);
-    let learner_peak = peak_index(learn_energy, start, end);
-    (learner_peak as i32 - ref_peak as i32) as f32
-}
-
-fn peak_index(data: &[f32], start: usize, end: usize) -> usize {
-    let mut best_idx = start;
-    let mut best_value = f32::MIN;
-    for idx in start..end {
-        let value = data.get(idx).copied().unwrap_or(0.0);
-        if value > best_value {
-            best_value = value;
-            best_idx = idx;
+    let mut count = 0.0;
+    for row in grid {
+        for cell in row {
+            if cell.local.is_finite() {
+                total += cell.local;
+                count += 1.0;
+            }
         }
     }
-    best_idx
+    let mean = if count == 0.0 { 0.0 } else { total / count };
+    (1.0 / (1.0 + mean / COST_NORMALISER)).clamp(0.0, 1.0)
+}
+
+#[derive(Clone, Copy)]
+struct Point {
+    row: usize,
+    col: usize,
+    cost: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Cell {
+    cost: f32,
+    local: f32,
+    direction: Direction,
+}
+
+impl Cell {
+    fn origin(cost: f32) -> Self {
+        Self {
+            cost,
+            local: cost,
+            direction: Direction::Origin,
+        }
+    }
+
+    fn with_prev(cost: f32, local: f32, direction: Direction) -> Self {
+        Self {
+            cost,
+            local,
+            direction,
+        }
+    }
+
+    fn invalid() -> Self {
+        Self {
+            cost: f32::INFINITY,
+            local: f32::INFINITY,
+            direction: Direction::Origin,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+enum Direction {
+    #[default]
+    Origin,
+    Diagonal,
+    Up,
+    Left,
+}
+
+#[derive(Clone, Copy)]
+struct Step {
+    cost: f32,
+    direction: Direction,
+}
+
+impl Step {
+    fn new(cost: f32, direction: Direction) -> Self {
+        Self { cost, direction }
+    }
+
+    fn better(current: Self, cell: Cell, direction: Direction) -> Self {
+        if !cell.cost.is_finite() || cell.cost >= current.cost {
+            current
+        } else {
+            Self {
+                cost: cell.cost,
+                direction,
+            }
+        }
+    }
+}
+
+struct SegmentSummary {
+    phonemes: Vec<AlignedPhoneme>,
+    total_cost: f32,
+    global_offset: f32,
+    confidence: f32,
+    similarity_band: Vec<f32>,
+}
+
+struct SegmentMetrics {
+    timing_delta: f32,
+    similarity: f32,
+    articulation: f32,
+    cost: f32,
+}
+
+struct SegmentAccumulator {
+    phonemes: Vec<AlignedPhoneme>,
+    similarity: Vec<f32>,
+    total_cost: f32,
+    total_offset: f32,
+    segments: usize,
+    path_len: usize,
+}
+
+impl SegmentAccumulator {
+    fn new(path_len: usize) -> Self {
+        Self {
+            phonemes: Vec::new(),
+            similarity: Vec::new(),
+            total_cost: 0.0,
+            total_offset: 0.0,
+            segments: 0,
+            path_len,
+        }
+    }
+
+    fn push(
+        &mut self,
+        reference: &PronunciationFeatures,
+        learner: &PronunciationFeatures,
+        segment: &[Point],
+        segment_id: usize,
+    ) -> Result<()> {
+        let stats = segment_metrics(reference, learner, segment)?;
+        self.total_cost += stats.cost;
+        self.total_offset += stats.timing_delta;
+        self.similarity.push(stats.similarity);
+        self.phonemes
+            .push(build_segment_phoneme(segment, &stats, segment_id));
+        self.segments += 1;
+        Ok(())
+    }
+
+    fn finish(self, grid: &[Vec<Cell>]) -> SegmentSummary {
+        let segments = self.segments.max(1) as f32;
+        SegmentSummary {
+            phonemes: self.phonemes,
+            total_cost: self.total_cost / self.path_len.max(1) as f32,
+            global_offset: self.total_offset / segments,
+            confidence: confidence_from_cost(grid),
+            similarity_band: self.similarity,
+        }
+    }
 }

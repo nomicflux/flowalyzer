@@ -6,12 +6,15 @@ pub mod ui;
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use std::fs::File;
+use std::io::BufReader;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ndarray::{Array1, Array2};
+use serde::{Deserialize, Serialize};
 
 use crate::audio::{decoder, resample};
 use crate::types::AudioData;
@@ -53,7 +56,7 @@ pub struct RecordedClip {
 }
 
 /// Feature batch placeholder backing future spectral analysis outputs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PronunciationFeatures {
     pub frame_count: usize,
     pub mel_bands: usize,
@@ -81,7 +84,7 @@ impl Default for PronunciationFeatures {
 }
 
 /// Alignment report describing coarse timing and similarity comparisons.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlignmentReport {
     pub phonemes: Vec<AlignedPhoneme>,
     pub total_duration: Duration,
@@ -89,9 +92,12 @@ pub struct AlignmentReport {
     pub learner_path_cost: f32,
     pub global_time_offset_ms: f32,
     pub confidence: f32,
+    pub reference_energy: Vec<f32>,
+    pub learner_energy: Vec<f32>,
+    pub similarity_band: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AlignedPhoneme {
     pub symbol: String,
     pub reference_start_ms: f32,
@@ -104,7 +110,7 @@ pub struct AlignedPhoneme {
 }
 
 /// Aggregate pronunciation scores produced from alignment results.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PronunciationScores {
     pub overall: f32,
     pub timing: f32,
@@ -113,12 +119,55 @@ pub struct PronunciationScores {
     pub per_phoneme: Vec<PhonemeScore>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PhonemeScore {
     pub symbol: String,
     pub timing: f32,
     pub articulation: f32,
     pub intonation: f32,
+}
+
+/// Weighting factors applied during alignment cost computation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlignmentWeights {
+    pub mfcc: f32,
+    pub delta: f32,
+    pub delta_delta: f32,
+    pub mel: f32,
+    pub energy: f32,
+    pub flux: f32,
+}
+
+impl Default for AlignmentWeights {
+    fn default() -> Self {
+        Self {
+            mfcc: 0.35,
+            delta: 0.2,
+            delta_delta: 0.1,
+            mel: 0.1,
+            energy: 0.2,
+            flux: 0.05,
+        }
+    }
+}
+
+impl AlignmentWeights {
+    pub fn load_from_assets(root: &Path) -> Result<Self> {
+        let path = root.join("config/alignment_weights.json");
+        let file = File::open(&path).map_err(|err| {
+            PronunciationError::new(format!(
+                "failed to open alignment weights at {:?}: {}",
+                path, err
+            ))
+        })?;
+        let reader = BufReader::new(file);
+        serde_json::from_reader(reader).map_err(|err| {
+            PronunciationError::new(format!(
+                "failed to deserialize alignment weights {:?}: {}",
+                path, err
+            ))
+        })
+    }
 }
 
 /// Capture configuration shared across workflows.
@@ -150,6 +199,7 @@ pub struct SessionConfig {
     pub learner_wav: PathBuf,
     pub assets_root: PathBuf,
     pub capture: CaptureSettings,
+    pub alignment: AlignmentWeights,
     pub ui_enabled: bool,
 }
 
@@ -159,12 +209,14 @@ impl SessionConfig {
         learner_wav: PathBuf,
         assets_root: PathBuf,
         capture: CaptureSettings,
+        alignment: AlignmentWeights,
     ) -> Self {
         Self {
             reference_wav,
             learner_wav,
             assets_root,
             capture,
+            alignment,
             ui_enabled: false,
         }
     }
@@ -189,7 +241,8 @@ pub fn run_session(config: SessionConfig) -> Result<SessionOutcome> {
     let extractor = features::FeatureExtractor::new();
     let reference_features = extractor.extract(&reference_clip)?;
     let learner_features = extractor.extract(&learner_clip)?;
-    let alignment = alignment::AudioAligner::new().align(&reference_features, &learner_features)?;
+    let alignment = alignment::AudioAligner::new(config.alignment.clone())
+        .align(&reference_features, &learner_features)?;
     let scores = metrics::MetricCalculator::new().score(&alignment)?;
     let outcome = SessionOutcome { alignment, scores };
     if config.ui_enabled {

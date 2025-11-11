@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use flowalyzer::config::AppConfig;
-use flowalyzer::pronunciation::{run_session, CaptureSettings, SessionConfig};
+use flowalyzer::pronunciation::{run_session, AlignmentWeights, CaptureSettings, SessionConfig};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use tempfile::tempdir;
 
@@ -20,7 +20,8 @@ fn run_session_completes_without_transcripts() -> Result<()> {
 
     let assets = AppConfig::from_override(Some(project_assets_root()))?;
     let capture = CaptureSettings::new(None, SAMPLE_RATE, 100..=200);
-    let config = SessionConfig::new(reference, learner, assets.assets_root, capture);
+    let weights = AlignmentWeights::load_from_assets(&assets.assets_root)?;
+    let config = SessionConfig::new(reference, learner, assets.assets_root, capture, weights);
     let outcome = run_session(config)?;
 
     assert!(outcome.scores.overall.is_finite());

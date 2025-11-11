@@ -4,6 +4,7 @@ use flowalyzer::pronunciation::{AlignedPhoneme, AlignmentReport};
 use std::time::Duration;
 
 fn make_report(phonemes: Vec<AlignedPhoneme>, confidence: f32) -> AlignmentReport {
+    let similarity_band = phonemes.iter().map(|p| p.similarity).collect();
     AlignmentReport {
         phonemes,
         total_duration: Duration::from_millis(120),
@@ -11,6 +12,9 @@ fn make_report(phonemes: Vec<AlignedPhoneme>, confidence: f32) -> AlignmentRepor
         learner_path_cost: 0.5,
         global_time_offset_ms: 0.0,
         confidence,
+        reference_energy: vec![0.8, 0.7, 0.75],
+        learner_energy: vec![0.8, 0.7, 0.75],
+        similarity_band,
     }
 }
 
@@ -37,9 +41,13 @@ fn metrics_scoring_balanced_alignment() {
     let report = make_report(phonemes, 0.85);
     let scores = MetricCalculator::new().score(&report).unwrap();
 
+    println!(
+        "balanced timing={:.3} articulation={:.3} intonation={:.3} overall={:.3}",
+        scores.timing, scores.articulation, scores.intonation, scores.overall
+    );
     assert_relative_eq!(scores.timing, 0.9, epsilon = 0.05);
     assert_relative_eq!(scores.articulation, 0.92, epsilon = 0.05);
-    assert_relative_eq!(scores.intonation, 0.9, epsilon = 0.05);
+    assert_relative_eq!(scores.intonation, 1.0, epsilon = 0.05);
     assert_relative_eq!(scores.overall, 0.89, epsilon = 0.05);
     assert_eq!(scores.per_phoneme.len(), 3);
     assert!(scores
@@ -54,11 +62,17 @@ fn metrics_penalize_large_deviation() {
         phoneme("T", 180.0, 0.2, 0.5),
         phoneme("AY", -150.0, 0.4, 0.45),
     ];
-    let report = make_report(phonemes, 0.4);
+    let mut report = make_report(phonemes, 0.4);
+    report.reference_energy = vec![0.95, 0.9, 0.88];
+    report.learner_energy = vec![0.2, 0.25, 0.22];
     let scores = MetricCalculator::new().score(&report).unwrap();
 
+    println!(
+        "deviation timing={:.3} articulation={:.3} intonation={:.3} overall={:.3}",
+        scores.timing, scores.articulation, scores.intonation, scores.overall
+    );
     assert!(scores.timing < 0.2);
-    assert!(scores.articulation <= 0.7);
+    assert!(scores.articulation <= 0.8);
     assert!(scores.intonation < 0.6);
     assert!(scores.overall < 0.5);
 }

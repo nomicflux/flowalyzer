@@ -91,13 +91,9 @@ mod tests {
             "180",
         ])
         .unwrap();
-        match cli.command {
-            Command::Session(args) => {
-                let range = args.pipeline.capture.latency_range().unwrap();
-                assert_eq!((*range.start(), *range.end()), (120, 180));
-            }
-            other => panic!("unexpected command parsed: {:?}", other),
-        }
+        let Command::Session(args) = cli.command;
+        let range = args.pipeline.capture.latency_range().unwrap();
+        assert_eq!((*range.start(), *range.end()), (120, 180));
     }
 
     #[test]
@@ -113,12 +109,8 @@ mod tests {
             "150",
         ])
         .unwrap();
-        match cli.command {
-            Command::Session(args) => {
-                assert!(args.pipeline.capture.latency_range().is_err());
-            }
-            other => panic!("unexpected command parsed: {:?}", other),
-        }
+        let Command::Session(args) = cli.command;
+        assert!(args.pipeline.capture.latency_range().is_err());
     }
 
     #[test]
@@ -132,14 +124,10 @@ mod tests {
             "learn.wav",
         ])
         .unwrap();
-        match cli.command {
-            Command::Session(args) => {
-                let capture = &args.pipeline.capture;
-                let range = capture.latency_range().unwrap();
-                assert_eq!((*range.start(), *range.end()), (100, 200));
-                assert_eq!(capture.sample_rate, 16_000);
-            }
-            other => panic!("unexpected command parsed: {:?}", other),
-        }
+        let Command::Session(args) = cli.command;
+        let capture = &args.pipeline.capture;
+        let range = capture.latency_range().unwrap();
+        assert_eq!((*range.start(), *range.end()), (100, 200));
+        assert_eq!(capture.sample_rate, 16_000);
     }
 }

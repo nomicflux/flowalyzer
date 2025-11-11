@@ -25,8 +25,8 @@ impl SessionApp {
             Some(0)
         };
         Self {
-            reference_waveform: generate_waveform(0),
-            learner_waveform: generate_waveform(1),
+            reference_waveform: to_waveform(&alignment.reference_energy),
+            learner_waveform: to_waveform(&alignment.learner_energy),
             spectrogram: build_spectrogram(&alignment),
             alignment,
             scores,
@@ -115,25 +115,15 @@ fn show_phoneme_details(ui: &mut egui::Ui, phoneme: &AlignedPhoneme) {
     ));
 }
 
-fn generate_waveform(seed: u32) -> Vec<f32> {
-    let len = 512;
-    (0..len)
-        .map(|index| {
-            let t = index as f32 / len as f32;
-            (t * 10.0 + seed as f32).sin() * 0.5 + (t * 30.0).cos() * 0.25
-        })
-        .collect()
-}
-
 fn build_spectrogram(alignment: &AlignmentReport) -> Option<SpectrogramData> {
-    let rows = alignment.phonemes.len();
+    let rows = alignment.similarity_band.len();
     if rows == 0 {
         return None;
     }
     let cols = 64;
     let mut values = Vec::with_capacity(rows * cols);
-    for phoneme in &alignment.phonemes {
-        let base = phoneme.similarity.clamp(0.0, 1.0);
+    for band in &alignment.similarity_band {
+        let base = band.clamp(0.0, 1.0);
         for col in 0..cols {
             let ratio = col as f32 / cols as f32;
             let emphasis = 1.0 - (ratio - 0.5).abs() * 2.0;
@@ -141,4 +131,19 @@ fn build_spectrogram(alignment: &AlignmentReport) -> Option<SpectrogramData> {
         }
     }
     Some(SpectrogramData::new(rows, cols, values))
+}
+
+fn to_waveform(samples: &[f32]) -> Vec<f32> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let peak = samples
+        .iter()
+        .map(|value| value.abs())
+        .fold(0.0_f32, f32::max)
+        .max(1e-6);
+    samples
+        .iter()
+        .map(|value| (value / peak).clamp(-1.0, 1.0))
+        .collect()
 }

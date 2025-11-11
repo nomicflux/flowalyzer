@@ -13,6 +13,7 @@
 - (2025-11-10) Capture stream latency: default 100–200 ms buffer, configurable.
 - (2025-11-10) Accessibility baseline: keyboard focus and sensible contrast; further accommodations pending future guidance.
 - (2025-11-11) User: "This is an application to practice PRONUNCIATION in NON-ENGLISH LANGUAGES ... The application should record and show how User audio differs significantly from provided audio ... This should be a near real-time analysis. 100-200ms lag is fine, but doing the analysis and then requiring a separate tool is not."
+- (2025-11-11) User: "Keep in mind, the key goal was not STRICTLY UNDER 200ms ... If heavier computation is needed to give a still interactive result that is significantly higher quality, that should be implemented."
 
 ## Explicitly Rejected
 - (2025-11-10) User: "Do NOT edit the plan file itself."
@@ -25,6 +26,7 @@
 - Default capture buffer remains 100–200 ms, surfaced through `CaptureSettings` inside `SessionConfig`.
 - CLI is session-only: `pronunciation session` is the sole entrypoint, and the former `record`, `play`, `record-and-play`, and `analyze` helpers were removed in favour of in-session feedback.
 - UI retains baseline accessibility (focus navigation, contrast, labels) with future enhancements pending guidance.
+- Alignment weights (`mfcc`, `delta`, `delta_delta`, `mel`, `energy`, `flux`) are loaded from `assets/config/alignment_weights.json` and injected through `SessionConfig` so tuning never requires recompilation.
 - Feature extraction (`src/pronunciation/features/`) still produces normalized mel/flux/energy/MFCC (+Δ/+ΔΔ) tensors via `aus` (25 ms Hann window, 10 ms hop, 80 mel bands, 13 coefficients) used by the placeholder alignment.
 - Metrics (`src/pronunciation/metrics/mod.rs`) aggregate placeholder alignment data into timing, articulation, and intonation scores; per-segment diagnostics feed the visualisation.
 - UI architecture (`src/ui/`) renders waveform, spectrogram, and timeline views driven by `SessionApp`, now populated by the audio-only alignment report.

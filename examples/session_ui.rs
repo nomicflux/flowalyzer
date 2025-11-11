@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use flowalyzer::config::AppConfig;
 use flowalyzer::pronunciation::{
-    alignment::AudioAligner, metrics::MetricCalculator, CaptureSettings, PronunciationFeatures,
-    SessionConfig,
+    alignment::AudioAligner, metrics::MetricCalculator, AlignmentWeights, CaptureSettings,
+    PronunciationFeatures, SessionConfig,
 };
 use flowalyzer::ui::launch_ui;
 use ndarray::{Array1, Array2};
@@ -13,17 +13,18 @@ fn main() -> Result<()> {
     let reference = synthetic_features(120, 80, 13, 0.0);
     let learner = synthetic_features(120, 80, 13, 0.2);
 
-    let aligner = AudioAligner::new();
-    let alignment = aligner.align(&reference, &learner)?;
-
-    let scores = MetricCalculator::new().score(&alignment)?;
     let assets = AppConfig::from_override(None)?;
+    let weights = AlignmentWeights::load_from_assets(&assets.assets_root)?;
+    let aligner = AudioAligner::new(weights.clone());
+    let alignment = aligner.align(&reference, &learner)?;
+    let scores = MetricCalculator::new().score(&alignment)?;
     let capture = CaptureSettings::new(None, 16_000, 100..=200);
     let config = SessionConfig::new(
         PathBuf::from("fixtures/reference.wav"),
         PathBuf::from("fixtures/learner.wav"),
         assets.assets_root,
         capture,
+        weights,
     )
     .with_ui(true);
 

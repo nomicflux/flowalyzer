@@ -1,0 +1,9 @@
+{
+  "mfcc": 0.35,
+  "delta": 0.2,
+  "delta_delta": 0.1,
+  "mel": 0.1,
+  "energy": 0.2,
+  "flux": 0.05
+}
+
