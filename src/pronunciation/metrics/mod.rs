@@ -59,15 +59,29 @@ fn articulation_score(phonemes: &[AlignedPhoneme]) -> f32 {
 }
 
 fn prosody_score(report: &AlignmentReport) -> f32 {
+    let contour_score = if report.contour_band.is_empty() {
+        None
+    } else {
+        Some(average_band(report.contour_band.iter().copied()))
+    };
+    let energy_score = energy_alignment_score(report);
+    contour_score
+        .map(|contour| blend_contour_with_energy(contour, energy_score))
+        .unwrap_or(
+            energy_score.unwrap_or_else(|| average_band(report.similarity_band.iter().copied())),
+        )
+}
+
+fn energy_alignment_score(report: &AlignmentReport) -> Option<f32> {
     if report.reference_energy.is_empty() || report.learner_energy.is_empty() {
-        return average_band(report.similarity_band.iter().copied());
+        return None;
     }
     let len = report
         .reference_energy
         .len()
         .min(report.learner_energy.len());
     if len == 0 {
-        return 1.0;
+        return None;
     }
     let mut total = 0.0;
     for idx in 0..len {
@@ -75,7 +89,14 @@ fn prosody_score(report: &AlignmentReport) -> f32 {
             (report.reference_energy[idx] - report.learner_energy[idx]).abs() / ENERGY_TOLERANCE;
         total += 1.0 - delta.min(1.0);
     }
-    (total / len as f32).clamp(0.0, 1.0)
+    Some((total / len as f32).clamp(0.0, 1.0))
+}
+
+fn blend_contour_with_energy(contour: f32, energy: Option<f32>) -> f32 {
+    match energy {
+        Some(energy_score) => (contour * 0.7 + energy_score * 0.3).clamp(0.0, 1.0),
+        None => contour,
+    }
 }
 
 fn average_band<I>(values: I) -> f32
@@ -106,7 +127,7 @@ fn per_phoneme_scores(phonemes: &[AlignedPhoneme]) -> Vec<PhonemeScore> {
             symbol: phoneme.symbol.clone(),
             timing: band_from_delta(phoneme.timing_delta_ms),
             articulation: (1.0 - phoneme.articulation_variance).clamp(0.0, 1.0),
-            intonation: phoneme.similarity.clamp(0.0, 1.0),
+            intonation: phoneme.contour_similarity.clamp(0.0, 1.0),
         })
         .collect()
 }

@@ -3,6 +3,7 @@ use eframe::egui;
 use crate::pronunciation::{AlignedPhoneme, AlignmentReport, PronunciationScores};
 use crate::ui::components::control_panel::ControlPanel;
 use crate::ui::components::phoneme_timeline::PhonemeTimeline;
+use crate::ui::components::pitch::PitchView;
 use crate::ui::components::spectrogram::{SpectrogramData, SpectrogramView};
 use crate::ui::components::waveform::WaveformView;
 
@@ -15,6 +16,8 @@ pub struct SessionApp {
     reference_waveform: Vec<f32>,
     learner_waveform: Vec<f32>,
     spectrogram: Option<SpectrogramData>,
+    reference_pitch: Vec<f32>,
+    learner_pitch: Vec<f32>,
 }
 
 impl SessionApp {
@@ -28,6 +31,8 @@ impl SessionApp {
             reference_waveform: to_waveform(&alignment.reference_energy),
             learner_waveform: to_waveform(&alignment.learner_energy),
             spectrogram: build_spectrogram(&alignment),
+            reference_pitch: alignment.reference_pitch.clone(),
+            learner_pitch: alignment.learner_pitch.clone(),
             alignment,
             scores,
             selected_phoneme: selected,
@@ -67,6 +72,8 @@ impl SessionApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.show_waveforms(ui);
             ui.separator();
+            self.show_pitch(ui);
+            ui.separator();
             SpectrogramView {
                 data: self.spectrogram.as_ref(),
             }
@@ -91,6 +98,14 @@ impl SessionApp {
         });
     }
 
+    fn show_pitch(&self, ui: &mut egui::Ui) {
+        PitchView {
+            reference: &self.reference_pitch,
+            learner: &self.learner_pitch,
+        }
+        .show(ui);
+    }
+
     fn selected_phoneme(&self) -> Option<&AlignedPhoneme> {
         self.selected_phoneme
             .and_then(|index| self.alignment.phonemes.get(index))
@@ -113,16 +128,25 @@ fn show_phoneme_details(ui: &mut egui::Ui, phoneme: &AlignedPhoneme) {
         "Articulation variance: {:.2}",
         phoneme.articulation_variance
     ));
+    ui.label(format!(
+        "Contour similarity: {:.2}",
+        phoneme.contour_similarity
+    ));
 }
 
 fn build_spectrogram(alignment: &AlignmentReport) -> Option<SpectrogramData> {
-    let rows = alignment.similarity_band.len();
+    let source = if alignment.contour_band.is_empty() {
+        &alignment.similarity_band
+    } else {
+        &alignment.contour_band
+    };
+    let rows = source.len();
     if rows == 0 {
         return None;
     }
     let cols = 64;
     let mut values = Vec::with_capacity(rows * cols);
-    for band in &alignment.similarity_band {
+    for band in source {
         let base = band.clamp(0.0, 1.0);
         for col in 0..cols {
             let ratio = col as f32 / cols as f32;

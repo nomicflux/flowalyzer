@@ -97,6 +97,9 @@ pub struct AlignmentReport {
     pub reference_energy: Vec<f32>,
     pub learner_energy: Vec<f32>,
     pub similarity_band: Vec<f32>,
+    pub contour_band: Vec<f32>,
+    pub reference_pitch: Vec<f32>,
+    pub learner_pitch: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -109,6 +112,7 @@ pub struct AlignedPhoneme {
     pub timing_delta_ms: f32,
     pub similarity: f32,
     pub articulation_variance: f32,
+    pub contour_similarity: f32,
 }
 
 /// Aggregate pronunciation scores produced from alignment results.
@@ -138,17 +142,19 @@ pub struct AlignmentWeights {
     pub mel: f32,
     pub energy: f32,
     pub flux: f32,
+    pub pitch: f32,
 }
 
 impl Default for AlignmentWeights {
     fn default() -> Self {
         Self {
-            mfcc: 0.35,
-            delta: 0.2,
-            delta_delta: 0.1,
+            mfcc: 0.3,
+            delta: 0.15,
+            delta_delta: 0.05,
             mel: 0.1,
-            energy: 0.2,
+            energy: 0.15,
             flux: 0.05,
+            pitch: 0.2,
         }
     }
 }

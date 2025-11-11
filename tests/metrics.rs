@@ -5,6 +5,7 @@ use std::time::Duration;
 
 fn make_report(phonemes: Vec<AlignedPhoneme>, confidence: f32) -> AlignmentReport {
     let similarity_band = phonemes.iter().map(|p| p.similarity).collect();
+    let contour_band = phonemes.iter().map(|p| p.contour_similarity).collect();
     AlignmentReport {
         phonemes,
         total_duration: Duration::from_millis(120),
@@ -15,10 +16,19 @@ fn make_report(phonemes: Vec<AlignedPhoneme>, confidence: f32) -> AlignmentRepor
         reference_energy: vec![0.8, 0.7, 0.75],
         learner_energy: vec![0.8, 0.7, 0.75],
         similarity_band,
+        contour_band,
+        reference_pitch: vec![],
+        learner_pitch: vec![],
     }
 }
 
-fn phoneme(symbol: &str, delta: f32, variance: f32, similarity: f32) -> AlignedPhoneme {
+fn phoneme(
+    symbol: &str,
+    delta: f32,
+    variance: f32,
+    similarity: f32,
+    contour: f32,
+) -> AlignedPhoneme {
     AlignedPhoneme {
         symbol: symbol.to_string(),
         reference_start_ms: 0.0,
@@ -28,15 +38,16 @@ fn phoneme(symbol: &str, delta: f32, variance: f32, similarity: f32) -> AlignedP
         timing_delta_ms: delta,
         similarity,
         articulation_variance: variance,
+        contour_similarity: contour,
     }
 }
 
 #[test]
 fn metrics_scoring_balanced_alignment() {
     let phonemes = vec![
-        phoneme("T", 10.0, 0.05, 0.9),
-        phoneme("AY", -12.0, 0.08, 0.92),
-        phoneme("M", 6.0, 0.04, 0.88),
+        phoneme("T", 10.0, 0.05, 0.9, 0.94),
+        phoneme("AY", -12.0, 0.08, 0.92, 0.96),
+        phoneme("M", 6.0, 0.04, 0.88, 0.92),
     ];
     let report = make_report(phonemes, 0.85);
     let scores = MetricCalculator::new().score(&report).unwrap();
@@ -47,7 +58,7 @@ fn metrics_scoring_balanced_alignment() {
     );
     assert_relative_eq!(scores.timing, 0.9, epsilon = 0.05);
     assert_relative_eq!(scores.articulation, 0.92, epsilon = 0.05);
-    assert_relative_eq!(scores.intonation, 1.0, epsilon = 0.05);
+    assert_relative_eq!(scores.intonation, 0.95, epsilon = 0.05);
     assert_relative_eq!(scores.overall, 0.89, epsilon = 0.05);
     assert_eq!(scores.per_phoneme.len(), 3);
     assert!(scores
@@ -59,8 +70,8 @@ fn metrics_scoring_balanced_alignment() {
 #[test]
 fn metrics_penalize_large_deviation() {
     let phonemes = vec![
-        phoneme("T", 180.0, 0.2, 0.5),
-        phoneme("AY", -150.0, 0.4, 0.45),
+        phoneme("T", 180.0, 0.2, 0.5, 0.35),
+        phoneme("AY", -150.0, 0.4, 0.45, 0.25),
     ];
     let mut report = make_report(phonemes, 0.4);
     report.reference_energy = vec![0.95, 0.9, 0.88];

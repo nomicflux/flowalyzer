@@ -43,6 +43,9 @@ impl AudioAligner {
             reference_energy: reference.energy.to_vec(),
             learner_energy: learner.energy.to_vec(),
             similarity_band: segments.similarity_band,
+            contour_band: segments.contour_band,
+            reference_pitch: reference.pitch_contour.to_vec(),
+            learner_pitch: learner.pitch_contour.to_vec(),
         })
     }
 }
@@ -51,6 +54,7 @@ const FRAME_HOP_MS: f32 = 10.0;
 const DEFAULT_WARP_BAND: usize = 20;
 const DEFAULT_SEGMENT_FRAMES: usize = 18;
 const COST_NORMALISER: f32 = 6.0;
+const PITCH_TOLERANCE_SEMITONES: f32 = 3.0;
 
 fn ensure_features(
     reference: &PronunciationFeatures,
@@ -146,7 +150,8 @@ fn frame_cost(
         + delta_delta * weights.delta_delta
         + mel * weights.mel
         + energy * weights.energy
-        + flux * weights.flux)
+        + flux * weights.flux
+        + pitch_cost(reference, learner, row, col) * weights.pitch)
         .min(COST_NORMALISER)
 }
 
@@ -159,6 +164,22 @@ fn mean_abs(lhs: ArrayView1<'_, f32>, rhs: ArrayView1<'_, f32>) -> f32 {
         .map(|(a, b)| (a - b).abs())
         .sum::<f32>()
         / lhs.len().min(rhs.len()) as f32
+}
+
+fn pitch_cost(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    row: usize,
+    col: usize,
+) -> f32 {
+    let ref_pitch = reference
+        .pitch_contour
+        .get(row)
+        .copied()
+        .unwrap_or_default();
+    let learner_pitch = learner.pitch_contour.get(col).copied().unwrap_or_default();
+    let diff = (ref_pitch - learner_pitch).abs();
+    (diff / PITCH_TOLERANCE_SEMITONES).min(1.0)
 }
 
 fn trace_optimal_path(grid: &[Vec<Cell>]) -> Result<Vec<Point>> {
@@ -240,18 +261,21 @@ fn segment_metrics(
     segment: &[Point],
 ) -> Result<SegmentMetrics> {
     let mut timing_delta = 0.0;
-    let mut similarity = 0.0;
+    let mut spectral = 0.0;
     let mut articulation = 0.0;
+    let mut contour = 0.0;
     for point in segment {
         timing_delta += frame_delta(point.row, point.col);
-        similarity += 1.0 - (point.cost / COST_NORMALISER).min(1.0);
+        spectral += 1.0 - (point.cost / COST_NORMALISER).min(1.0);
         articulation += flux_delta(reference, learner, point.row, point.col)?;
+        contour += pitch_similarity(reference, learner, point.row, point.col);
     }
     let length = segment.len() as f32;
     Ok(SegmentMetrics {
         timing_delta: timing_delta / length,
-        similarity: (similarity / length).clamp(0.0, 1.0),
+        spectral_similarity: (spectral / length).clamp(0.0, 1.0),
         articulation: (articulation / length).clamp(0.0, 1.0),
+        contour_similarity: (contour / length).clamp(0.0, 1.0),
         cost: segment.iter().map(|p| p.cost).sum::<f32>() / length,
     })
 }
@@ -270,8 +294,9 @@ fn build_segment_phoneme(
         learner_start_ms: frame_to_ms(first.col),
         learner_end_ms: frame_to_ms(last.col + 1),
         timing_delta_ms: stats.timing_delta,
-        similarity: stats.similarity,
+        similarity: stats.spectral_similarity,
         articulation_variance: stats.articulation,
+        contour_similarity: stats.contour_similarity,
     }
 }
 
@@ -294,6 +319,15 @@ fn flux_delta(
         .get(col)
         .ok_or_else(|| PronunciationError::new("spectral flux column out of bounds"))?;
     Ok((ref_flux - learner_flux).abs())
+}
+
+fn pitch_similarity(
+    reference: &PronunciationFeatures,
+    learner: &PronunciationFeatures,
+    row: usize,
+    col: usize,
+) -> f32 {
+    1.0 - pitch_cost(reference, learner, row, col)
 }
 
 fn confidence_from_cost(grid: &[Vec<Cell>]) -> f32 {
@@ -389,18 +423,21 @@ struct SegmentSummary {
     global_offset: f32,
     confidence: f32,
     similarity_band: Vec<f32>,
+    contour_band: Vec<f32>,
 }
 
 struct SegmentMetrics {
     timing_delta: f32,
-    similarity: f32,
+    spectral_similarity: f32,
     articulation: f32,
+    contour_similarity: f32,
     cost: f32,
 }
 
 struct SegmentAccumulator {
     phonemes: Vec<AlignedPhoneme>,
-    similarity: Vec<f32>,
+    spectral: Vec<f32>,
+    contour: Vec<f32>,
     total_cost: f32,
     total_offset: f32,
     segments: usize,
@@ -411,7 +448,8 @@ impl SegmentAccumulator {
     fn new(path_len: usize) -> Self {
         Self {
             phonemes: Vec::new(),
-            similarity: Vec::new(),
+            spectral: Vec::new(),
+            contour: Vec::new(),
             total_cost: 0.0,
             total_offset: 0.0,
             segments: 0,
@@ -429,7 +467,8 @@ impl SegmentAccumulator {
         let stats = segment_metrics(reference, learner, segment)?;
         self.total_cost += stats.cost;
         self.total_offset += stats.timing_delta;
-        self.similarity.push(stats.similarity);
+        self.spectral.push(stats.spectral_similarity);
+        self.contour.push(stats.contour_similarity);
         self.phonemes
             .push(build_segment_phoneme(segment, &stats, segment_id));
         self.segments += 1;
@@ -443,7 +482,8 @@ impl SegmentAccumulator {
             total_cost: self.total_cost / self.path_len.max(1) as f32,
             global_offset: self.total_offset / segments,
             confidence: confidence_from_cost(grid),
-            similarity_band: self.similarity,
+            similarity_band: self.spectral,
+            contour_band: self.contour,
         }
     }
 }
