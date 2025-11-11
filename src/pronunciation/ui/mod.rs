@@ -1,15 +1,18 @@
 use crate::pronunciation::{AlignmentReport, PronunciationScores, Result};
 
-/// Lightweight snapshot of visualization state.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct VisualizationState {
-    pub updated: bool,
+    pub alignment: AlignmentReport,
+    pub scores: PronunciationScores,
 }
 
 /// Prepares visualization data for the outer UI layer.
 pub fn prepare_visualization(
-    _alignment: &AlignmentReport,
-    _scores: &PronunciationScores,
+    alignment: &AlignmentReport,
+    scores: &PronunciationScores,
 ) -> Result<VisualizationState> {
-    Ok(VisualizationState { updated: true })
+    Ok(VisualizationState {
+        alignment: alignment.clone(),
+        scores: scores.clone(),
+    })
 }

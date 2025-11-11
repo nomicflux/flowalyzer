@@ -1,10 +1,32 @@
-use crate::pronunciation::{AlignmentReport, PronunciationScores, Result, SessionConfig};
+pub mod components;
+pub mod screens;
 
-/// Launches the interactive pronunciation UI.
+use eframe::NativeOptions;
+
+use crate::pronunciation::{
+    AlignmentReport, PronunciationError, PronunciationScores, Result, SessionConfig,
+};
+
 pub fn launch_ui(
-    _config: &SessionConfig,
-    _alignment: &AlignmentReport,
-    _scores: &PronunciationScores,
+    config: &SessionConfig,
+    alignment: &AlignmentReport,
+    scores: &PronunciationScores,
 ) -> Result<()> {
-    Ok(())
+    let app = screens::session::SessionApp::new(alignment.clone(), scores.clone());
+    let options = NativeOptions::default();
+    eframe::run_native(
+        &window_title(config),
+        options,
+        Box::new(move |_cc| Box::new(app)),
+    )
+    .map_err(|err| PronunciationError::new(err.to_string()))
+}
+
+fn window_title(config: &SessionConfig) -> String {
+    config
+        .reference_wav
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| format!("Flowalyzer Pronunciation – {}", name.to_string_lossy()))
+        .unwrap_or_else(|| "Flowalyzer Pronunciation".to_string())
 }

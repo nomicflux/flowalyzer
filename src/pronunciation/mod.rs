@@ -155,8 +155,8 @@ pub fn run_session(config: SessionConfig) -> Result<()> {
     let scores = metrics.score(&alignment)?;
 
     if config.ui_enabled {
-        let _state = ui::prepare_visualization(&alignment, &scores)?;
-        // A future phase will hand off `_state` to `crate::ui::launch_ui`.
+        let state = ui::prepare_visualization(&alignment, &scores)?;
+        crate::ui::launch_ui(&config, &state.alignment, &state.scores)?;
     }
     Ok(())
 }
