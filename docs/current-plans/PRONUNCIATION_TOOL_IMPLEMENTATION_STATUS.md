@@ -18,6 +18,7 @@
 ## Explicitly Rejected
 - (2025-11-10) User: "Do NOT edit the plan file itself."
 - (2025-11-10) Python- and WhisperX-based alignment tooling for the pronunciation binary.
+- (2025-11-11) User: "Pitch contours must be matched; direct pitch not." The prior interpretation that pitch should be ignored entirely (no contour enforcement) is invalid.
 
 ## Implementation Details
 - Architecture captured in `docs/current-plans/PRONUNCIATION_TOOL_AUDIO_ONLY_REDESIGN.md` (capture -> features -> audio alignment -> visualization) with updated data contracts for the transcript-free workflow.

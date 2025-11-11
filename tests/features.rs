@@ -22,6 +22,7 @@ struct ExpectedFeatures {
     mfcc: Vec<Vec<f32>>,
     deltas: Vec<Vec<f32>>,
     delta_deltas: Vec<Vec<f32>>,
+    pitch_contour: Vec<f32>,
 }
 
 #[test]
@@ -55,6 +56,7 @@ fn learner_features_align_with_reference_after_normalization() {
     assert_arrays_close(reference.delta_deltas, learner.delta_deltas, 1e-5);
     assert_vectors_close(reference.spectral_flux, learner.spectral_flux, 1e-5);
     assert_vectors_close(reference.energy, learner.energy, 1e-5);
+    assert_vectors_close(reference.pitch_contour, learner.pitch_contour, 1e-5);
 }
 
 fn load_clip(filename: &str) -> RecordedClip {
@@ -99,6 +101,7 @@ fn assert_features_match(features: &PronunciationFeatures, expected: &ExpectedFe
     assert_matrix_eq(&features.mfcc, &expected.mfcc, 1e-6);
     assert_matrix_eq(&features.deltas, &expected.deltas, 1e-6);
     assert_matrix_eq(&features.delta_deltas, &expected.delta_deltas, 1e-6);
+    assert_vector_eq(&features.pitch_contour, &expected.pitch_contour, 1e-6);
 }
 
 fn assert_matrix_eq(matrix: &Array2<f32>, expected: &[Vec<f32>], tol: f32) {

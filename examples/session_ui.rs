@@ -53,6 +53,9 @@ fn synthetic_features(
     });
     let deltas = mfcc.mapv(|value| value * 0.5);
     let delta_deltas = mfcc.mapv(|value| value * 0.25);
+    let pitch_contour = Array1::from_shape_fn(frame_count, |frame| {
+        ((frame as f32 * 0.02 + phase_offset).sin()).clamp(-1.0, 1.0)
+    });
 
     PronunciationFeatures {
         frame_count,
@@ -63,5 +66,6 @@ fn synthetic_features(
         mfcc,
         deltas,
         delta_deltas,
+        pitch_contour,
     }
 }

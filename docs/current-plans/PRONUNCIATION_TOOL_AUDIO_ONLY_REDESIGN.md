@@ -4,7 +4,7 @@
 - This is an application to practice **pronunciation in non-English languages** with complex phonemic structure.
 - The learner always shadows or responds to a **reference audio clip** inside the same interactive session.
 - The application must **record, compare, and visualise differences in near real time** (≤200 ms pipeline latency).
-- **Pitch is ignored**; timing, articulation, and prosody differences must be highlighted with actionable grading bands.
+- **Pitch contour (relative movement) must match while absolute pitch is ignored.** (2025-11-11) User: "Pitch contours must be matched; direct pitch not." / "if a woman speaks with a rising intonation, a man must also speak with a rising intonation." Timing, articulation, and prosody differences must be highlighted with actionable grading bands.
 - All guidance is delivered **within the interactive session**. No separate offline analyzers, transcripts, or text alignment survive.
 - ASK CLARIFYING QUESTIONS AS SOON AS ANY REQUIREMENT IS UNCLEAR.
 

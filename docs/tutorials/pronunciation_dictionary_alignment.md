@@ -7,6 +7,7 @@ This tutorial describes the intermediate, transcript-free alignment approach use
 - Operate entirely on audio features (mel, MFCC, spectral flux, energy).
 - Provide coarse but actionable feedback while the fully fledged audio alignment arrives in later phases.
 - Preserve the near real-time requirement (≤200 ms pipeline latency).
+- Enforce pitch contour matching (relative intonation) while remaining invariant to absolute pitch per (2025-11-11) User: "Pitch contours must be matched; direct pitch not."
 
 ## Feature Inputs
 
@@ -54,6 +55,6 @@ This tutorial describes the intermediate, transcript-free alignment approach use
 
 1. Replace the placeholder metrics with a mel/MFCC DTW implementation that enforces monotonic alignment but remains transcript-free.
 2. Expand the UI to visualise continuous timing deviations rather than discrete segment markers.
-3. Fold pitch-deemphasised scoring into the metrics module (e.g., explicitly filter pitch bands before similarity computations).
+3. Replace the placeholder intonation proxy with contour-aware scoring that matches rising/falling patterns ("if a woman speaks with a rising intonation, a man must also speak with a rising intonation.") while remaining insensitive to absolute pitch height.
 
 For the latest contract and planning details, see `docs/current-plans/PRONUNCIATION_TOOL_AUDIO_ONLY_REDESIGN.md`.

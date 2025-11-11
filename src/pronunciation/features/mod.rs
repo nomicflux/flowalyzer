@@ -1,3 +1,4 @@
+mod contour;
 mod mel;
 mod statistics;
 
@@ -26,8 +27,11 @@ impl FeatureExtractor {
         )
         .map_err(|err| PronunciationError::new(err.to_string()))?;
 
+        let frame_count = matrices.mel.len_of(Axis(0));
+        let pitch_contour = contour::extract_pitch_contour(clip, frame_count)?;
+
         Ok(PronunciationFeatures {
-            frame_count: matrices.mel.len_of(Axis(0)),
+            frame_count,
             mel_bands: matrices.mel.len_of(Axis(1)),
             mel_spectrogram: matrices.mel,
             spectral_flux: matrices.spectral_flux,
@@ -35,6 +39,7 @@ impl FeatureExtractor {
             mfcc: matrices.mfcc,
             deltas: matrices.deltas,
             delta_deltas: matrices.delta_deltas,
+            pitch_contour,
         })
     }
 }

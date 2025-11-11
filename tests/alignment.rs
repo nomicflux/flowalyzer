@@ -26,6 +26,7 @@ struct RawFeatures {
     mfcc: Vec<Vec<f32>>,
     deltas: Vec<Vec<f32>>,
     delta_deltas: Vec<Vec<f32>>,
+    pitch_contour: Vec<f32>,
 }
 
 #[test]
@@ -93,6 +94,7 @@ impl RawFeatures {
     fn into_features(self) -> Result<PronunciationFeatures> {
         ensure_len(self.frame_count, self.spectral_flux.len(), "spectral_flux")?;
         ensure_len(self.frame_count, self.energy.len(), "energy")?;
+        ensure_len(self.frame_count, self.pitch_contour.len(), "pitch_contour")?;
         let mel = to_array2(self.mel_spectrogram, self.frame_count, self.mel_bands)?;
         let mfcc_cols = column_count(&self.mfcc);
         let mfcc = to_array2(self.mfcc, self.frame_count, mfcc_cols)?;
@@ -107,6 +109,7 @@ impl RawFeatures {
             mfcc,
             deltas,
             delta_deltas,
+            pitch_contour: Array1::from(self.pitch_contour),
         })
     }
 }

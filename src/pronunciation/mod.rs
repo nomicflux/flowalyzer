@@ -66,6 +66,7 @@ pub struct PronunciationFeatures {
     pub mfcc: Array2<f32>,
     pub deltas: Array2<f32>,
     pub delta_deltas: Array2<f32>,
+    pub pitch_contour: Array1<f32>,
 }
 
 impl Default for PronunciationFeatures {
@@ -79,6 +80,7 @@ impl Default for PronunciationFeatures {
             mfcc: Array2::zeros((0, 0)),
             deltas: Array2::zeros((0, 0)),
             delta_deltas: Array2::zeros((0, 0)),
+            pitch_contour: Array1::zeros(0),
         }
     }
 }
