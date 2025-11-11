@@ -8,6 +8,8 @@ pub struct PhonemeTemplate {
     pub symbol: String,
     pub centroid: Array1<f32>,
     pub average_energy: f32,
+    pub start_frame: usize,
+    pub end_frame: usize,
 }
 
 /// Builds deterministic phoneme templates by evenly partitioning reference frames.
@@ -71,5 +73,7 @@ fn template_for(
         symbol: symbol.to_string(),
         centroid,
         average_energy,
+        start_frame: start,
+        end_frame: end,
     })
 }

@@ -15,8 +15,10 @@ pub struct DtwAlignment {
 #[derive(Debug, Clone)]
 pub struct AlignmentSegment {
     pub symbol: String,
-    pub start_frame: usize,
-    pub end_frame: usize,
+    pub learner_start_frame: usize,
+    pub learner_end_frame: usize,
+    pub reference_start_frame: usize,
+    pub reference_end_frame: usize,
     pub cost: f32,
     pub similarity: f32,
 }
@@ -118,8 +120,10 @@ fn backtrack_segments(
         let cost = segment_cost(template, learner, start, end)?;
         segments.push(AlignmentSegment {
             symbol: template.symbol.clone(),
-            start_frame: start,
-            end_frame: end,
+            learner_start_frame: start,
+            learner_end_frame: end,
+            reference_start_frame: template.start_frame,
+            reference_end_frame: template.end_frame,
             cost,
             similarity: similarity_from_cost(cost),
         });

@@ -55,15 +55,24 @@ fn dtw_alignment_segments_match_expected_ranges() {
 
     let first = &alignment.segments[0];
     assert_eq!(first.symbol, "AA");
-    assert_eq!((first.start_frame, first.end_frame), (0, 2));
+    assert_eq!(
+        (first.learner_start_frame, first.learner_end_frame),
+        (0, 2)
+    );
 
     let second = &alignment.segments[1];
     assert_eq!(second.symbol, "BB");
-    assert_eq!((second.start_frame, second.end_frame), (2, 5));
+    assert_eq!(
+        (second.learner_start_frame, second.learner_end_frame),
+        (2, 5)
+    );
 
     let third = &alignment.segments[2];
     assert_eq!(third.symbol, "CC");
-    assert_eq!((third.start_frame, third.end_frame), (5, 7));
+    assert_eq!(
+        (third.learner_start_frame, third.learner_end_frame),
+        (5, 7)
+    );
 
     let total: f32 = alignment.segments.iter().map(|seg| seg.cost).sum();
     assert!((alignment.total_cost - total).abs() < 1e-5);
@@ -73,7 +82,10 @@ fn dtw_alignment_segments_match_expected_ranges() {
         .all(|seg| seg.similarity.is_finite() && seg.similarity <= 1.0 && seg.similarity > 0.0));
 
     let (start_ms, end_ms) =
-        frames_to_ms(alignment.segments[1].start_frame, alignment.segments[1].end_frame);
+        frames_to_ms(
+            alignment.segments[1].learner_start_frame,
+            alignment.segments[1].learner_end_frame,
+        );
     assert!((start_ms - 20.0).abs() < 1e-3);
     assert!((end_ms - 50.0).abs() < 1e-3);
 }

@@ -80,20 +80,37 @@ impl Default for PronunciationFeatures {
 pub struct AlignmentReport {
     pub phonemes: Vec<AlignedPhoneme>,
     pub total_duration: Duration,
+    pub reference_path_cost: f32,
+    pub learner_path_cost: f32,
+    pub global_time_offset_ms: f32,
     pub confidence: f32,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct AlignedPhoneme {
     pub symbol: String,
+    pub reference_start_ms: f32,
+    pub reference_end_ms: f32,
+    pub learner_start_ms: f32,
+    pub learner_end_ms: f32,
     pub timing_delta_ms: f32,
     pub similarity: f32,
+    pub articulation_variance: f32,
 }
 
 /// Aggregate pronunciation scores produced from alignment results.
 #[derive(Debug, Clone, Default)]
 pub struct PronunciationScores {
     pub overall: f32,
+    pub timing: f32,
+    pub articulation: f32,
+    pub intonation: f32,
+    pub per_phoneme: Vec<PhonemeScore>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PhonemeScore {
+    pub symbol: String,
     pub timing: f32,
     pub articulation: f32,
     pub intonation: f32,
@@ -130,7 +147,11 @@ pub fn run_session(config: SessionConfig) -> Result<()> {
 
     let reference_features = extractor.extract(&reference_clip)?;
     let learner_features = extractor.extract(&learner_clip)?;
-    let alignment = aligner.align(&reference_features, &learner_features)?;
+    let transcript = config
+        .transcript
+        .as_deref()
+        .ok_or_else(|| PronunciationError::new("transcript required for alignment"))?;
+    let alignment = aligner.align(transcript, &reference_features, &learner_features)?;
     let scores = metrics.score(&alignment)?;
 
     if config.ui_enabled {
