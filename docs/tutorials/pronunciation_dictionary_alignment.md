@@ -1,72 +1,59 @@
-# Pronunciation Dictionary & Alignment Tutorial
+# Audio-Only Alignment Walkthrough
 
-This walkthrough explains how Flowalyzer’s pronunciation pipeline loads a CMU-style lexicon, interprets ARPABET phoneme symbols, and uses them during the alignment phase.
+This tutorial describes the intermediate, transcript-free alignment approach used after the Phase 1 audio-only reset. It explains how the placeholder implementation compares learner audio to a reference clip and surfaces timing/similarity metrics inside the session UI.
 
-## CMU-Style Pronunciation Dictionary
+## Goals
 
-- **File**: `assets/phonemes/lexicon.txt`
-- **Format**: Each line contains a token followed by its phoneme sequence.
-  - Example: `ALIGNMENT  AH0 L AY1 N M AH0 N T`
-  - Words are uppercase; parenthetical suffixes (e.g., `(1)`) designate alternate pronunciations and are removed by the loader.
-- **Storage**: The file is baked into the binary with Rust’s `include_str!` and is tracked by `build.rs` to trigger rebuilds when it changes.
+- Operate entirely on audio features (mel, MFCC, spectral flux, energy).
+- Provide coarse but actionable feedback while the fully fledged audio alignment arrives in later phases.
+- Preserve the near real-time requirement (≤200 ms pipeline latency).
 
-## ARPABET Refresher
+## Feature Inputs
 
-- ARPABET is a phonetic transcription system used by CMUdict.
-- Symbols represent phonemes (e.g., `P`, `R`, `AY1`).
-- Vowels carry stress markers:
-  - `0` – no stress
-  - `1` – primary stress
-  - `2` – secondary stress
-- Consonants have no stress digits (e.g., `S`, `CH`, `ZH`).
-- Flowalyzer keeps the symbols as-is; downstream code may optionally strip stress suffixes if a model requires it.
+- `PronunciationFeatures` is produced by `src/pronunciation/features/FeatureExtractor` for both reference and learner clips.
+- The extractor uses `aus` to compute:
+  - Log-magnitude mel spectrogram (80 bands)
+  - Spectral flux
+  - Frame energy
+  - MFCC vectors plus deltas and delta-deltas
+- Everything is normalized frame-wise to keep statistics comparable across clips.
 
-## Dictionary Loader
+## Placeholder Alignment (`AudioAligner`)
 
-- **Module**: `src/pronunciation/alignment/dictionary.rs`
-- Uses a global `DEFAULT_DICTIONARY` (`once_cell::sync::Lazy`) backed by the bundled lexicon.
-- Key steps:
-  1. Normalize tokens (uppercase, strip punctuation other than apostrophes).
-  2. Parse each lexicon line into phoneme sequences.
-  3. Store variants in `HashMap<String, Vec<Box<[&'static str]>>>`.
-- Primary APIs:
-  - `PronunciationDictionary::shared()` – access the singleton.
-  - `lookup(token)` – get phoneme variants for one token.
-  - `map_tokens(tokens)` – map an entire transcript.
-- Tests: `tests/alignment/dictionary.rs` verifies normalization, lookups, and error handling.
+- **Module**: `src/pronunciation/alignment/mod.rs`
+- Key steps per segment:
+  1. Slice the feature tensors into fixed-size windows (~120 ms, 12 frames).
+  2. Compute MFCC L¹ distance averaged across coefficients → similarity score (`1 / (1 + distance)`).
+  3. Compare spectral flux between clips → articulation variance proxy.
+  4. Locate energy peaks → timing delta (converted to milliseconds).
+- Segments are labeled sequentially (`#1`, `#2`, …) until the end of the shorter clip is reached.
+- Aggregated statistics (mean similarity, articulation, timing offset) become the `AlignmentReport` used by metrics and the UI.
 
-## Template Generation
+## Metrics
 
-- **Module**: `src/pronunciation/alignment/templates.rs`
-- Function `build_templates(reference_features, phonemes)`:
-  - Evenly partitions reference frames by phoneme count.
-  - Computes MFCC centroids and average energy per segment.
-  - Returns `PhonemeTemplate` structs consumed by the DTW core.
+- **Module**: `src/pronunciation/metrics/mod.rs`
+- Consumes the placeholder `AlignmentReport` and computes:
+  - Overall confidence (weighted combination of segment similarity and cost)
+  - Timing score (penalises mean timing deltas)
+  - Articulation score (penalises spectral flux variance)
+  - Intonation score (re-uses similarity as a stand-in until pitch-insensitive scoring lands)
+- Per-segment values populate the timeline and badges in the session UI.
 
-## Dynamic Time Warping Alignment
+## UI Integration
 
-- **Module**: `src/pronunciation/alignment/dtw.rs`
-- Function `align_templates(templates, learner_features)`:
-  1. Runs monotonic DTW over phoneme templates and learner frames.
-  2. Accumulates costs combining MFCC distance and energy penalty.
-  3. Backtracks to produce ordered `AlignmentSegment` entries.
-  4. Converts frame indices to milliseconds via `frames_to_ms`.
-- Tests: `tests/alignment/dtw.rs` plus fixtures in `tests/fixtures/alignment/` validate segment boundaries and cost aggregation.
+- `src/ui/screens/session.rs` renders waveform, spectrogram, and segment summaries.
+- Each synthetic “phoneme” slot corresponds to an `AlignmentReport` segment with timing, similarity, and articulation values.
+- When the audio-only DTW alignment is implemented in Phase 2, the UI wiring remains the same; only the upstream data source changes.
 
-## How It Fits Together
+## Testing
 
-1. **Transcript Mapping**: The CLI or UI collects a transcript; `PronunciationDictionary::map_tokens` converts each token to ARPABET sequences.
-2. **Template Synthesis**: Reference audio features go through `build_templates` using one chosen variant per token (Phase 4 defaults to the first variant).
-3. **Learner Alignment**: `align_templates` compares learner features against templates and returns timing data and similarity scores for each phoneme.
-4. **Reporting**: `PhonemeAligner::align` assembles these results into an `AlignmentReport`, which later phases will feed into scoring and visualization.
+- `tests/session_smoke.rs` synthesises short sine waves, runs `run_session` headlessly, and asserts that the placeholder alignment returns at least one segment with finite scores.
+- Additional unit tests can target `AudioAligner` helpers (e.g., MFCC similarity, energy peak detection) if finer-grained coverage is required.
 
-## Extending or Customizing
+## Roadmap
 
-- **Adding Pronunciations**: Append lines to `assets/phonemes/lexicon.txt`. Run `cargo fmt` + the full test suite to ensure the dictionary still loads.
-- **Alternative Stress Handling**: Strip digits in `normalize_token` or before template generation if a stressless comparison is required.
-- **Multiple Pronunciation Variants**: In future phases, iterate through variants (or use language models) to select the best match before generating templates.
+1. Replace the placeholder metrics with a mel/MFCC DTW implementation that enforces monotonic alignment but remains transcript-free.
+2. Expand the UI to visualise continuous timing deviations rather than discrete segment markers.
+3. Fold pitch-deemphasised scoring into the metrics module (e.g., explicitly filter pitch bands before similarity computations).
 
-## Next Steps
-
-For deeper integration details, follow Phase 4 of `docs/current-plans/RECORDING_AND_ANALYSIS.md` and inspect `src/pronunciation/mod.rs`, where alignment integrates with metrics and the UI pipeline.
-
+For the latest contract and planning details, see `docs/current-plans/PRONUNCIATION_TOOL_AUDIO_ONLY_REDESIGN.md`.

@@ -8,7 +8,7 @@
 - (2025-11-10) User: "1. Interactive tool. (Can be desktop, can be browser-based. But must be real-time and interactive.)"
 - (2025-11-10) User: "2. Requires spectral & phoneme analysis (don't know whether this is beyond whisper or not)"
 - (2025-11-10) Platform scope: macOS 15 only.
-- Phase 1 forbids Python tooling and WhisperX; the alignment pipeline must be pure Rust with a bundled CMU-style lexicon.
+- Phase 1 forbids Python tooling and WhisperX; the alignment pipeline must be pure Rust and operate entirely on audio (no transcripts).
 
 ## Data Flow Summary
 1. **Capture** (`src/audio/`, invoked by secondary binary): record mono 16 kHz PCM frames from the default (or selected) microphone using `cpal`. Store raw samples as `RecordedClip` (Vec<f32>, 16 kHz, mono) plus metadata (duration, RMS, capture timestamp).
@@ -19,19 +19,17 @@
    - Spectral flux and frame energy.
    - 13-coefficient MFCCs with delta and delta-delta.
    All tensors normalized frame-wise and clipped to match reference length.
-3. **Phoneme Alignment** (`src/pronunciation/alignment/`): map reference transcript tokens through bundled CMU lexicon (assets/phonemes/lexicon.txt) to phoneme sequences; generate template likelihoods from reference features; run dynamic time warping comparing learner/reference trajectories to produce `AlignmentReport` (per-phoneme timing offset, similarity score, articulation variance).
-4. **Metrics** (`src/pronunciation/metrics/`): aggregate `AlignmentReport` into `PronunciationScores` (overall score, timing deviation score, articulation score, intonation variance). Provide per-phoneme diagnostics for visualization.
-5. **Visualization / UI** (`src/ui/`): immediate-mode `egui`/`eframe` surface showing waveform, mel spectrogram overlays, phoneme timeline, and playback controls. Consumes `RecordedClip`, `AlignmentReport`, `PronunciationScores`.
+3. **Audio Alignment** (`src/pronunciation/alignment/`): compare reference/learner feature trajectories (MFCC similarity, spectral flux variance, energy timing offsets) to produce `AlignmentReport` segments summarising coarse timing and articulation differences.
+4. **Metrics** (`src/pronunciation/metrics/`): aggregate `AlignmentReport` into `PronunciationScores` (overall score, timing deviation score, articulation score, intonation variance). Provide segment-level diagnostics for visualization.
+5. **Visualization / UI** (`src/ui/`): immediate-mode `egui`/`eframe` surface showing waveform, mel spectrogram overlays, and session feedback badges. Consumes `RecordedClip`, `AlignmentReport`, `PronunciationScores`.
 
 ## Module Responsibilities
-- `src/bin/pronunciation.rs`: entrypoint driving CLI flow (record, playback, analyze, visualize). Responsible for dispatching to library modules and handling configuration.
-- `src/pronunciation/mod.rs`: central module exporting submodules, shared types (`PronunciationError`, `RecordedClip`, `FeatureBatch`, `AlignmentReport`, `PronunciationScores`, `SessionConfig`), and top-level orchestration helpers (`run_session`, `analyze_recording`).
+- `src/bin/pronunciation.rs`: entrypoint driving the session-only CLI flow (`pronunciation session`). Responsible for dispatching to library modules and handling configuration.
+- `src/pronunciation/mod.rs`: central module exporting submodules, shared types (`PronunciationError`, `RecordedClip`, `FeatureBatch`, `AlignmentReport`, `PronunciationScores`, `SessionConfig`, `CaptureSettings`), and the top-level orchestration helper (`run_session`).
 - `src/pronunciation/features/mod.rs`: defines `FeatureExtractor` and supporting helpers (window generation, mel filter bank caching, normalization).
-- `src/pronunciation/alignment/mod.rs`: hosts `PhonemeAligner`, dictionary loader, DTW kernel, and alignment result structs.
+- `src/pronunciation/alignment/mod.rs`: hosts the audio-only alignment placeholder that derives `AlignmentReport` from feature statistics.
 - `src/pronunciation/metrics/mod.rs`: provides scoring combinators, thresholds, and serialization of results.
 - `src/ui/mod.rs`: wraps `eframe` application bootstrap and view composition (`launch_ui`, `SessionApp`, reusable widgets for waveform/spectrogram/timeline).
-- `assets/phonemes/lexicon.txt`: CMU-style pronunciation dictionary embedded via `build.rs`.
-
 ## Data Contracts
 - `RecordedClip`
   - `samples: Arc<[f32]>` (normalized to [-1.0, 1.0])
@@ -71,8 +69,9 @@
   - `per_phoneme: Vec<PhonemeScore>`
 - `SessionConfig`
   - `reference_wav: PathBuf`
-  - `transcript: String`
-  - `analysis_window: Option<Range<u32>>`
+  - `learner_wav: PathBuf`
+  - `assets_root: PathBuf`
+  - `capture: CaptureSettings`
   - `ui_enabled: bool`
 
 ## External Dependencies
@@ -96,13 +95,13 @@
 2. Capture pipeline records `RecordedClip`.
 3. Reference WAV decoded to `RecordedClip`.
 4. `FeatureExtractor` produces `FeatureBatch` for learner and reference audio; caches filter banks for reuse.
-5. `PhonemeAligner` loads lexicon, maps transcript, and runs DTW to produce `AlignmentReport`.
+5. `alignment::AudioAligner` compares reference and learner features to produce `AlignmentReport`.
 6. `MetricCalculator` generates `PronunciationScores`.
-7. `ui::launch_ui` displays results; CLI fallback prints summary.
+7. `ui::launch_ui` displays results inside the session window.
 
 ## Testing Outlook
-- Unit tests: Feature extraction determinism (mel/MFCC fixtures), alignment accuracy using synthetic phoneme sequences, scoring aggregation sanity checks.
-- Integration tests (later phases): end-to-end record -> analyze -> visualize workflow using short fixtures and golden JSON outputs.
+- Unit tests: Feature extraction determinism (mel/MFCC fixtures), placeholder alignment behaviour using synthetic audio pairs, scoring aggregation sanity checks.
+- Integration tests (later phases): end-to-end record -> session -> visualize workflow using short fixtures.
 - Static analysis: `cargo fmt`, `cargo clippy --all-targets --all-features` required before Phase handoff.
 
 ## Open Questions

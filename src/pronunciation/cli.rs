@@ -2,10 +2,13 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use anyhow::{ensure, Result};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "pronunciation", about = "Audio capture and playback utility")]
+#[command(
+    name = "pronunciation",
+    about = "Real-time pronunciation session utility (audio capture helpers included)"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -13,19 +16,12 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Record microphone audio to a WAV file.
-    Record(RecordArgs),
-    /// Play an existing audio file through the default output device.
-    Play(PlayArgs),
-    /// Record audio and immediately play it back.
-    RecordAndPlay(RecordArgs),
+    /// Launch the interactive pronunciation session UI.
+    Session(SessionArgs),
 }
 
-#[derive(Parser, Debug, Clone)]
-pub struct RecordArgs {
-    /// Recording duration in seconds.
-    #[arg(long, default_value_t = 5.0)]
-    pub duration: f32,
+#[derive(Args, Debug, Clone)]
+pub struct CaptureArgs {
     /// Optional input device name.
     #[arg(long)]
     pub device: Option<String>,
@@ -35,45 +31,60 @@ pub struct RecordArgs {
     /// Maximum latency in milliseconds for capture buffering.
     #[arg(long = "latency-max")]
     pub latency_max: Option<u32>,
-    /// Target sample rate for the captured audio.
+    /// Target sample rate for capture/playback.
     #[arg(long, default_value_t = 16_000)]
     pub sample_rate: u32,
-    /// Output WAV path for the recorded audio.
-    #[arg(long, default_value = "recording.wav")]
-    pub output: PathBuf,
 }
 
-#[derive(Parser, Debug)]
-pub struct PlayArgs {
-    /// Path to the audio file to play.
-    #[arg(long)]
-    pub file: PathBuf,
-}
-
-pub fn latency_range(args: &RecordArgs) -> Result<RangeInclusive<u32>> {
-    match (args.latency_min, args.latency_max) {
-        (Some(min), Some(max)) => {
-            ensure!(min > 0, "latency_min must be positive");
-            ensure!(max >= min, "latency_max must be >= latency_min");
-            Ok(min..=max)
+impl CaptureArgs {
+    pub fn latency_range(&self) -> Result<RangeInclusive<u32>> {
+        match (self.latency_min, self.latency_max) {
+            (Some(min), Some(max)) => {
+                ensure!(min > 0, "latency_min must be positive");
+                ensure!(max >= min, "latency_max must be >= latency_min");
+                Ok(min..=max)
+            }
+            (None, None) => Ok(100..=200),
+            _ => anyhow::bail!("provide both latency-min and latency-max or neither"),
         }
-        (None, None) => Ok(100..=200),
-        _ => anyhow::bail!("provide both latency-min and latency-max or neither"),
     }
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PipelineArgs {
+    /// Path to the reference pronunciation WAV file.
+    #[arg(long)]
+    pub reference: PathBuf,
+    /// Path to the learner-produced WAV file.
+    #[arg(long)]
+    pub learner: PathBuf,
+    #[command(flatten)]
+    pub capture: CaptureArgs,
+    /// Optional override for the assets directory.
+    #[arg(long = "assets-path")]
+    pub assets_path: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct SessionArgs {
+    #[command(flatten)]
+    pub pipeline: PipelineArgs,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{latency_range, Cli, Command};
+    use super::{Cli, Command};
     use clap::Parser;
 
     #[test]
     fn parses_and_validates_latency_range() {
         let cli = Cli::try_parse_from([
             "pronunciation",
-            "record",
-            "--duration",
-            "2.5",
+            "session",
+            "--reference",
+            "ref.wav",
+            "--learner",
+            "learn.wav",
             "--latency-min",
             "120",
             "--latency-max",
@@ -81,8 +92,8 @@ mod tests {
         ])
         .unwrap();
         match cli.command {
-            Command::Record(args) => {
-                let range = latency_range(&args).unwrap();
+            Command::Session(args) => {
+                let range = args.pipeline.capture.latency_range().unwrap();
                 assert_eq!((*range.start(), *range.end()), (120, 180));
             }
             other => panic!("unexpected command parsed: {:?}", other),
@@ -91,10 +102,42 @@ mod tests {
 
     #[test]
     fn rejects_partial_latency_override() {
-        let cli = Cli::try_parse_from(["pronunciation", "record", "--latency-min", "150"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "pronunciation",
+            "session",
+            "--reference",
+            "ref.wav",
+            "--learner",
+            "learn.wav",
+            "--latency-min",
+            "150",
+        ])
+        .unwrap();
         match cli.command {
-            Command::Record(args) => {
-                assert!(latency_range(&args).is_err());
+            Command::Session(args) => {
+                assert!(args.pipeline.capture.latency_range().is_err());
+            }
+            other => panic!("unexpected command parsed: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn session_defaults_to_latency_range() {
+        let cli = Cli::try_parse_from([
+            "pronunciation",
+            "session",
+            "--reference",
+            "ref.wav",
+            "--learner",
+            "learn.wav",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Session(args) => {
+                let capture = &args.pipeline.capture;
+                let range = capture.latency_range().unwrap();
+                assert_eq!((*range.start(), *range.end()), (100, 200));
+                assert_eq!(capture.sample_rate, 16_000);
             }
             other => panic!("unexpected command parsed: {:?}", other),
         }

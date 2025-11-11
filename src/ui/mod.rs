@@ -25,8 +25,7 @@ pub fn launch_ui(
 fn window_title(config: &SessionConfig) -> String {
     config
         .reference_wav
-        .as_ref()
-        .and_then(|path| path.file_name())
+        .file_name()
         .map(|name| format!("Flowalyzer Pronunciation – {}", name.to_string_lossy()))
         .unwrap_or_else(|| "Flowalyzer Pronunciation".to_string())
 }

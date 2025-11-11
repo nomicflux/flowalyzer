@@ -6,12 +6,17 @@ pub mod ui;
 
 use std::error::Error;
 use std::fmt::{Display, Formatter};
-use std::ops::Range;
-use std::path::PathBuf;
+use std::ops::RangeInclusive;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ndarray::{Array1, Array2};
+
+use crate::audio::{decoder, resample};
+use crate::types::AudioData;
+
+const TARGET_SAMPLE_RATE: u32 = 16_000;
 
 /// Convenient alias for results returned by pronunciation modules.
 pub type Result<T> = std::result::Result<T, PronunciationError>;
@@ -75,7 +80,7 @@ impl Default for PronunciationFeatures {
     }
 }
 
-/// Alignment report placeholder describing phoneme timing comparisons.
+/// Alignment report describing coarse timing and similarity comparisons.
 #[derive(Debug, Clone, Default)]
 pub struct AlignmentReport {
     pub phonemes: Vec<AlignedPhoneme>,
@@ -116,47 +121,140 @@ pub struct PhonemeScore {
     pub intonation: f32,
 }
 
-/// Session configuration shared across CLI, analysis, and UI.
+/// Capture configuration shared across workflows.
 #[derive(Debug, Clone)]
-pub struct SessionConfig {
-    pub reference_wav: Option<PathBuf>,
-    pub transcript: Option<String>,
-    pub analysis_window: Option<Range<u32>>,
-    pub ui_enabled: bool,
+pub struct CaptureSettings {
+    pub device_name: Option<String>,
+    pub sample_rate: u32,
+    pub latency_ms: RangeInclusive<u32>,
 }
 
-impl Default for SessionConfig {
-    fn default() -> Self {
+impl CaptureSettings {
+    pub fn new(
+        device_name: Option<String>,
+        sample_rate: u32,
+        latency_ms: RangeInclusive<u32>,
+    ) -> Self {
         Self {
-            reference_wav: None,
-            transcript: None,
-            analysis_window: None,
-            ui_enabled: true,
+            device_name,
+            sample_rate,
+            latency_ms,
         }
     }
 }
 
+/// Session configuration shared across CLI, analysis, and UI.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    pub reference_wav: PathBuf,
+    pub learner_wav: PathBuf,
+    pub assets_root: PathBuf,
+    pub capture: CaptureSettings,
+    pub ui_enabled: bool,
+}
+
+impl SessionConfig {
+    pub fn new(
+        reference_wav: PathBuf,
+        learner_wav: PathBuf,
+        assets_root: PathBuf,
+        capture: CaptureSettings,
+    ) -> Self {
+        Self {
+            reference_wav,
+            learner_wav,
+            assets_root,
+            capture,
+            ui_enabled: false,
+        }
+    }
+
+    pub fn with_ui(mut self, enabled: bool) -> Self {
+        self.ui_enabled = enabled;
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionOutcome {
+    pub alignment: AlignmentReport,
+    pub scores: PronunciationScores,
+}
+
 /// Primary orchestration entry point for the pronunciation pipeline.
-pub fn run_session(config: SessionConfig) -> Result<()> {
+pub fn run_session(config: SessionConfig) -> Result<SessionOutcome> {
+    validate_config(&config)?;
+    let reference_clip = load_clip(&config.reference_wav)?;
+    let learner_clip = load_clip(&config.learner_wav)?;
     let extractor = features::FeatureExtractor::new();
-    let aligner = alignment::PhonemeAligner::new();
-    let metrics = metrics::MetricCalculator::new();
-
-    let reference_clip = RecordedClip::default();
-    let learner_clip = RecordedClip::default();
-
     let reference_features = extractor.extract(&reference_clip)?;
     let learner_features = extractor.extract(&learner_clip)?;
-    let transcript = config
-        .transcript
-        .as_deref()
-        .ok_or_else(|| PronunciationError::new("transcript required for alignment"))?;
-    let alignment = aligner.align(transcript, &reference_features, &learner_features)?;
-    let scores = metrics.score(&alignment)?;
-
+    let alignment = alignment::AudioAligner::new().align(&reference_features, &learner_features)?;
+    let scores = metrics::MetricCalculator::new().score(&alignment)?;
+    let outcome = SessionOutcome { alignment, scores };
     if config.ui_enabled {
-        let state = ui::prepare_visualization(&alignment, &scores)?;
+        let state = ui::prepare_visualization(&outcome.alignment, &outcome.scores)?;
         crate::ui::launch_ui(&config, &state.alignment, &state.scores)?;
     }
+    Ok(outcome)
+}
+
+impl RecordedClip {
+    fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
+        let duration_secs = samples.len() as f64 / sample_rate as f64;
+        Self {
+            samples: Arc::from(samples.into_boxed_slice()),
+            sample_rate,
+            channels: 1,
+            duration: Duration::from_secs_f64(duration_secs),
+        }
+    }
+}
+
+fn validate_config(config: &SessionConfig) -> Result<()> {
+    if config.reference_wav.as_os_str().is_empty() {
+        return Err(PronunciationError::new("reference WAV path missing"));
+    }
+    if config.learner_wav.as_os_str().is_empty() {
+        return Err(PronunciationError::new("learner WAV path missing"));
+    }
+    if !config.assets_root.is_dir() {
+        return Err(PronunciationError::new(
+            "assets_root must point to an existing directory",
+        ));
+    }
+    if config.capture.sample_rate == 0 {
+        return Err(PronunciationError::new("sample_rate must be positive"));
+    }
+    let min_latency = *config.capture.latency_ms.start();
+    let max_latency = *config.capture.latency_ms.end();
+    if min_latency == 0 && max_latency == 0 {
+        return Err(PronunciationError::new(
+            "latency range must specify a positive window",
+        ));
+    }
+    if max_latency < min_latency {
+        return Err(PronunciationError::new(
+            "latency range must have max >= min",
+        ));
+    }
     Ok(())
+}
+
+fn load_clip(path: &Path) -> Result<RecordedClip> {
+    if !path.exists() {
+        return Err(PronunciationError::new(format!(
+            "audio file {:?} does not exist",
+            path
+        )));
+    }
+    let audio =
+        decoder::decode_audio(path).map_err(|err| PronunciationError::new(err.to_string()))?;
+    clip_from_audio(audio)
+}
+
+fn clip_from_audio(audio: AudioData) -> Result<RecordedClip> {
+    let samples = resample::linear_resample(&audio.samples, audio.sample_rate, TARGET_SAMPLE_RATE)
+        .map_err(|err| PronunciationError::new(err.to_string()))?;
+    Ok(RecordedClip::from_samples(samples, TARGET_SAMPLE_RATE))
 }
