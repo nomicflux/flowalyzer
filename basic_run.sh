@@ -69,7 +69,7 @@ if [ -n $language ]; then
 fi
 
 echo "Flowing with $file"
-cargo run -- \
+cargo run --bin flowalyzer -- \
   "$file" \
   "$outdir" \
   --recipe-json '{

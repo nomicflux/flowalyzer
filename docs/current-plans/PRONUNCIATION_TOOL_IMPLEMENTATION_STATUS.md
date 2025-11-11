@@ -23,12 +23,17 @@
 - Audio stack: `cpal` (capture), `rodio` (playback), `aus` (spectral analysis), `egui`/`eframe` (interactive UI). Alignment implemented in Rust via dynamic time warping over CMU-derived phoneme templates.
 - CMU-style lexicon bundled under `assets/phonemes/lexicon.txt`, embedded through `build.rs`.
 - Default capture buffer configured for 100–200 ms latency and exposed via `SessionConfig` for runtime adjustment.
+- Phase 2 capture/playback foundation: `src/audio/capture.rs` (deterministic 16 kHz capture with resampling), `src/audio/resample.rs` (linear interpolation helper), `src/audio/playback.rs` (rodio playback with stereo normalization), and `src/pronunciation/cli.rs` (shared clap definitions for record/play commands).
 - UI scaffold will ensure baseline accessibility (focus navigation, contrast, labels); extended accessibility left for future phases.
+- Phase 3 spectral pipeline: `src/pronunciation/features/` now computes mel spectrograms, spectral flux, energy, and MFCC + Δ + ΔΔ features via `aus::spectrum::rstft`, `analysis::mel::make_mel_spectrogram`, and `analysis::mel::mfcc_spectrogram` using a 25 ms Hann window, 10 ms hop, 80 mel bands, and 13 MFCC coefficients. All tensors are zero-mean/unit-variance normalized per feature before returning.
+- Regression fixtures for feature extraction live under `tests/fixtures/features/` (silent `reference.wav` / `learner.wav` and JSON snapshots) with integration coverage in `tests/features.rs` to guard deterministic outputs and normalization behaviour.
 - Status doc updates must accompany each completed phase with dated notes and summary of executed tests.
 
 ## Issues Encountered
-- None yet.
+- (2025-11-11) Building the vendored `whisper-rs-sys` crate during `cargo test` required elevated file access to macOS SDK headers; re-ran the suite with `required_permissions: ['all']` to satisfy the sandbox guidance.
 
 ## Phase Progress
 - (2025-11-10) Phase 1 scaffolding established: architecture doc captured module contracts, pronunciation binary and modules compile cleanly, and `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test` all succeeded.
+- (2025-11-10) Phase 2 capture/playback complete: new audio capture/playback modules integrated, CLI now exposes record/play/record-and-play flows, regression tests added (`tests/audio_capture_playback.rs`), and `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test` all passed.
+- (2025-11-11) Phase 3 spectral feature pipeline complete: `FeatureExtractor` produces normalized mel/flux/energy/MFCC(+Δ/+ΔΔ) tensors backed by `aus`, fixtures in `tests/features.rs` validate deterministic outputs, and `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test` all executed successfully (with sandbox permission escalation noted above).
 

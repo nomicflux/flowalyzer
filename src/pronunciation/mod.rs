@@ -1,4 +1,5 @@
 pub mod alignment;
+pub mod cli;
 pub mod features;
 pub mod metrics;
 pub mod ui;
@@ -9,6 +10,8 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+
+use ndarray::{Array1, Array2};
 
 /// Convenient alias for results returned by pronunciation modules.
 pub type Result<T> = std::result::Result<T, PronunciationError>;
@@ -45,10 +48,31 @@ pub struct RecordedClip {
 }
 
 /// Feature batch placeholder backing future spectral analysis outputs.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PronunciationFeatures {
     pub frame_count: usize,
     pub mel_bands: usize,
+    pub mel_spectrogram: Array2<f32>,
+    pub spectral_flux: Array1<f32>,
+    pub energy: Array1<f32>,
+    pub mfcc: Array2<f32>,
+    pub deltas: Array2<f32>,
+    pub delta_deltas: Array2<f32>,
+}
+
+impl Default for PronunciationFeatures {
+    fn default() -> Self {
+        Self {
+            frame_count: 0,
+            mel_bands: 0,
+            mel_spectrogram: Array2::zeros((0, 0)),
+            spectral_flux: Array1::zeros(0),
+            energy: Array1::zeros(0),
+            mfcc: Array2::zeros((0, 0)),
+            deltas: Array2::zeros((0, 0)),
+            delta_deltas: Array2::zeros((0, 0)),
+        }
+    }
 }
 
 /// Alignment report placeholder describing phoneme timing comparisons.

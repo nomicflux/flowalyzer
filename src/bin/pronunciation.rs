@@ -1,57 +1,61 @@
-use std::ops::Range;
-use std::path::PathBuf;
+use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{ensure, Context, Result};
 use clap::Parser;
-use flowalyzer::pronunciation::{run_session, SessionConfig};
-
-#[derive(Parser, Debug)]
-#[command(
-    name = "pronunciation",
-    about = "Prototype pronunciation analysis binary (Phase 1 scaffolding)"
-)]
-struct Cli {
-    /// Optional reference audio to load during analysis
-    #[arg(long, value_name = "PATH")]
-    reference: Option<PathBuf>,
-    /// Optional transcript text used for future phoneme alignment
-    #[arg(long, value_name = "TEXT")]
-    transcript: Option<String>,
-    /// Start frame (inclusive) for analysis window in milliseconds
-    #[arg(long)]
-    analysis_start_ms: Option<u32>,
-    /// End frame (exclusive) for analysis window in milliseconds
-    #[arg(long)]
-    analysis_end_ms: Option<u32>,
-    /// Disable interactive UI even when available
-    #[arg(long)]
-    no_ui: bool,
-}
+use flowalyzer::audio::capture::{record_audio, CaptureConfig};
+use flowalyzer::audio::encoder;
+use flowalyzer::audio::playback;
+use flowalyzer::pronunciation::cli::{latency_range, Cli, Command, PlayArgs, RecordArgs};
+use flowalyzer::types::AudioData;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config = build_config(&cli)?;
-    run_session(config).map_err(|err| anyhow!(err))?;
+    match cli.command {
+        Command::Record(args) => handle_record(&args),
+        Command::Play(args) => handle_play(&args),
+        Command::RecordAndPlay(args) => handle_record_and_play(&args),
+    }
+}
+
+fn handle_record(args: &RecordArgs) -> Result<()> {
+    let audio = capture_audio(args)?;
+    persist_audio(&audio, &args.output)?;
+    println!(
+        "Recorded {} samples to {:?}",
+        audio.samples.len(),
+        args.output
+    );
     Ok(())
 }
 
-fn build_config(cli: &Cli) -> Result<SessionConfig> {
-    let analysis_window = parse_window(cli.analysis_start_ms, cli.analysis_end_ms)?;
-    Ok(SessionConfig {
-        reference_wav: cli.reference.clone(),
-        transcript: cli.transcript.clone(),
-        analysis_window,
-        ui_enabled: !cli.no_ui,
-    })
+fn handle_play(args: &PlayArgs) -> Result<()> {
+    playback::play_file(&args.file)
 }
 
-fn parse_window(start: Option<u32>, end: Option<u32>) -> Result<Option<Range<u32>>> {
-    match (start, end) {
-        (Some(s), Some(e)) if s < e => Ok(Some(s..e)),
-        (Some(_), Some(_)) => bail!("analysis_end_ms must be greater than analysis_start_ms"),
-        (None, None) => Ok(None),
-        (Some(_), None) | (None, Some(_)) => {
-            bail!("provide both analysis_start_ms and analysis_end_ms or neither")
+fn handle_record_and_play(args: &RecordArgs) -> Result<()> {
+    let audio = capture_audio(args)?;
+    persist_audio(&audio, &args.output)?;
+    playback::play_audio(&audio)?;
+    println!("Recorded and played back {:?}", args.output);
+    Ok(())
+}
+
+fn capture_audio(args: &RecordArgs) -> Result<AudioData> {
+    ensure!(args.duration > 0.0, "duration must be positive");
+    ensure!(args.sample_rate > 0, "sample rate must be positive");
+    let mut config = CaptureConfig::new(Duration::from_secs_f32(args.duration));
+    config.device_name = args.device.clone();
+    config.sample_rate = args.sample_rate;
+    config.latency_ms = latency_range(args)?;
+    record_audio(&config)
+}
+
+fn persist_audio(audio: &AudioData, output: &std::path::PathBuf) -> Result<()> {
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create directory {:?}", parent))?;
         }
     }
+    encoder::encode_audio(audio, output)
 }
