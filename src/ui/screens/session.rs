@@ -324,7 +324,7 @@ fn build_spectrogram_window(
     ))
 }
 
-fn spectrogram_source<'a>(alignment: &'a AlignmentReport) -> &'a [f32] {
+fn spectrogram_source(alignment: &AlignmentReport) -> &[f32] {
     if alignment.contour_band.is_empty() {
         &alignment.similarity_band
     } else {

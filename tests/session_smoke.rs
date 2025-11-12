@@ -27,6 +27,23 @@ fn session_engine_produces_alignment_with_mock_capture() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn session_snapshot_propagates_errors() -> Result<()> {
+    let mut snapshot = SessionSnapshot::default();
+    assert!(
+        snapshot.error.is_none(),
+        "initial snapshot should have no error"
+    );
+    let error_msg = "test error message";
+    snapshot = snapshot.with_error_message(error_msg.to_string());
+    assert_eq!(
+        snapshot.error.as_deref(),
+        Some(error_msg),
+        "snapshot should contain error message"
+    );
+    Ok(())
+}
+
 fn sine_wave(frequency: f32, duration_secs: f32) -> Vec<f32> {
     let total_samples = (SAMPLE_RATE as f32 * duration_secs) as usize;
     (0..total_samples)

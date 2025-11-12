@@ -10,6 +10,7 @@ use rodio::{OutputStream, OutputStreamHandle, Sink};
 
 use crate::audio::capture::CaptureConfig;
 use crate::audio::playback::duplicate_to_stereo;
+use tracing::{debug, error, info};
 
 use super::alignment::AudioAligner;
 use super::features::FeatureExtractor;
@@ -59,6 +60,11 @@ pub struct SessionSnapshot {
 impl SessionRuntime {
     pub fn new(config: SessionConfig) -> Result<Self> {
         validate_config(&config)?;
+        info!(
+            reference = %config.reference_wav.display(),
+            latency_budget_ms = config.latency_budget_ms,
+            "session config validated; launching runtime thread"
+        );
         let thread_config = config.clone();
         let (command_tx, command_rx) = channel();
         let (update_tx, update_rx) = channel();
@@ -67,12 +73,17 @@ impl SessionRuntime {
             .spawn(move || match EngineRunner::build(thread_config) {
                 Ok(runner) => runner.run(command_rx, update_tx),
                 Err(err) => {
+                    error!(error = %err, "failed to construct session engine");
                     let error_snapshot =
                         SessionSnapshot::default().with_error_message(err.to_string());
                     let _ = update_tx.send(error_snapshot);
                 }
             })
-            .map_err(|err| PronunciationError::new(err.to_string()))?;
+            .map_err(|err| {
+                error!(error = %err, "failed to spawn session runtime thread");
+                PronunciationError::new(err.to_string())
+            })?;
+        info!("session runtime thread spawned");
         Ok(Self {
             config,
             controller: SessionController { tx: command_tx },
@@ -256,6 +267,7 @@ pub mod engine {
     use crate::pronunciation::AlignmentWeights;
     use std::collections::VecDeque;
     use std::time::{Duration, Instant};
+    use tracing::{debug, error, info, warn};
 
     pub trait CaptureSource {
         fn start(&mut self) -> Result<u32>;
@@ -273,6 +285,7 @@ pub mod engine {
         reference_samples: usize,
         latency_budget_ms: u32,
         capture_sample_rate: Option<u32>,
+        chunk_count: usize,
     }
 
     impl<C: CaptureSource> SessionEngine<C> {
@@ -294,13 +307,17 @@ pub mod engine {
                 reference_samples: reference.samples.len(),
                 latency_budget_ms,
                 capture_sample_rate: None,
+                chunk_count: 0,
             })
         }
 
         pub fn start(&mut self, snapshot: &mut SessionSnapshot) -> Result<SessionSnapshot> {
+            info!("starting capture stream");
             let sample_rate = self.capture.start()?;
             self.capture_sample_rate = Some(sample_rate);
             self.learner_buffer.clear();
+            self.chunk_count = 0;
+            info!(sample_rate, "capture stream started successfully");
             *snapshot = snapshot.clone().with_recording(true, true);
             Ok(snapshot.clone())
         }
@@ -308,7 +325,23 @@ pub mod engine {
         pub fn poll(&mut self, snapshot: &mut SessionSnapshot) -> Result<Option<SessionSnapshot>> {
             let timeout = Duration::from_millis(CAPTURE_POLL_MS);
             if let Some(chunk) = self.capture.recv_chunk(timeout) {
+                self.chunk_count += 1;
                 if let Some(update) = self.process_chunk(chunk)? {
+                    if update.latency_ms > self.latency_budget_ms as f32 {
+                        warn!(
+                            latency_ms = update.latency_ms,
+                            budget_ms = self.latency_budget_ms,
+                            "latency exceeds budget"
+                        );
+                    }
+                    if self.chunk_count.is_multiple_of(50) {
+                        debug!(
+                            chunk = self.chunk_count,
+                            latency_ms = update.latency_ms,
+                            learner_samples = self.learner_buffer.len(),
+                            "processed chunk"
+                        );
+                    }
                     *snapshot = snapshot
                         .clone()
                         .with_alignment(update.alignment, update.scores)
@@ -321,6 +354,10 @@ pub mod engine {
         }
 
         pub fn stop(&mut self, snapshot: &mut SessionSnapshot) -> SessionSnapshot {
+            info!(
+                chunks_processed = self.chunk_count,
+                "stopping capture stream"
+            );
             self.capture.stop();
             self.capture_sample_rate = None;
             self.learner_buffer.clear();
@@ -330,6 +367,17 @@ pub mod engine {
 
         pub fn latency_budget_ms(&self) -> u32 {
             self.latency_budget_ms
+        }
+
+        pub fn reference_alignment(&self) -> AlignmentReport {
+            let mut alignment = AlignmentReport::default();
+            alignment.total_duration =
+                Duration::from_secs_f32(self.reference_samples as f32 / TARGET_SAMPLE_RATE as f32);
+            alignment.reference_energy = self.reference_features.energy.to_vec();
+            alignment.reference_pitch = self.reference_features.pitch_contour.to_vec();
+            alignment.similarity_band = normalize_band(&alignment.reference_energy);
+            alignment.contour_band = alignment.reference_pitch.clone();
+            alignment
         }
 
         fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
@@ -383,8 +431,21 @@ pub mod engine {
 
     impl CaptureSource for LiveCaptureSource {
         fn start(&mut self) -> Result<u32> {
-            let live = LiveCapture::start(&self.config)
-                .map_err(|err| PronunciationError::new(err.to_string()))?;
+            info!(
+                device = ?self.config.device_name,
+                sample_rate = self.config.sample_rate,
+                latency_ms = ?self.config.latency_ms,
+                "starting live capture stream"
+            );
+            let live = LiveCapture::start(&self.config).map_err(|err| {
+                let err_msg = err.to_string();
+                error!(
+                    device = ?self.config.device_name,
+                    error = %err_msg,
+                    "failed to start live capture stream"
+                );
+                PronunciationError::new(err_msg)
+            })?;
             let sample_rate = live.sample_rate();
             self.live = Some(live);
             Ok(sample_rate)
@@ -444,16 +505,48 @@ pub mod engine {
             self.started = false;
         }
     }
+
+    fn normalize_band(values: &[f32]) -> Vec<f32> {
+        if values.is_empty() {
+            return Vec::new();
+        }
+        let max = values
+            .iter()
+            .cloned()
+            .fold(0.0_f32, |acc, v| acc.max(v.abs()))
+            .max(1e-6);
+        values
+            .iter()
+            .map(|v| (v.abs() / max).clamp(0.0, 1.0))
+            .collect()
+    }
 }
 
 struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
     reference: RecordedClip,
+    initial_snapshot: SessionSnapshot,
 }
 
 impl EngineRunner {
     fn build(config: SessionConfig) -> Result<Self> {
+        info!(
+            path = %config.reference_wav.display(),
+            "loading reference WAV file"
+        );
         let reference = load_clip(&config.reference_wav)?;
+        info!(
+            duration_secs = reference.duration.as_secs_f64(),
+            sample_rate = reference.sample_rate,
+            samples = reference.samples.len(),
+            "reference WAV loaded successfully"
+        );
+        info!(
+            device = ?config.capture.device_name,
+            sample_rate = config.capture.sample_rate,
+            latency_ms = ?config.capture.latency_ms,
+            "creating live capture source"
+        );
         let capture = engine::LiveCaptureSource::new(&config.capture);
         let engine = engine::SessionEngine::new(
             reference.clone(),
@@ -461,29 +554,42 @@ impl EngineRunner {
             config.latency_budget_ms,
             capture,
         )?;
-        Ok(Self { engine, reference })
+        let initial_alignment = engine.reference_alignment();
+        let initial_snapshot = SessionSnapshot::default()
+            .with_alignment(initial_alignment, PronunciationScores::default());
+        info!("engine runner built; initial alignment computed");
+        Ok(Self {
+            engine,
+            reference,
+            initial_snapshot,
+        })
     }
-}
 
-impl EngineRunner {
     fn run(mut self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
-        let mut snapshot = SessionSnapshot::default();
+        let mut snapshot = self.initial_snapshot.clone();
+        info!("session runtime thread running; emitting initial snapshot");
         let _ = updates.send(snapshot.clone());
         while let Ok(command) = commands.recv() {
             match command {
                 SessionCommand::Start => {
+                    info!("received start command");
                     match self.handle_start(&commands, &updates, &mut snapshot) {
                         LoopExit::Finished => {}
                         LoopExit::Shutdown => break,
                     }
                 }
                 SessionCommand::Stop => {
+                    info!("received stop command");
                     let update = self.engine.stop(&mut snapshot);
                     let _ = updates.send(update);
                 }
-                SessionCommand::Shutdown => break,
+                SessionCommand::Shutdown => {
+                    info!("received shutdown command");
+                    break;
+                }
             }
         }
+        info!("session runtime thread exiting");
     }
 
     fn handle_start(
@@ -492,27 +598,33 @@ impl EngineRunner {
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
     ) -> LoopExit {
+        info!("recording session starting");
         let start_update = match self.engine.start(snapshot) {
             Ok(update) => update,
             Err(err) => {
+                error!(error = %err, "failed to start capture engine");
                 emit_error(updates, snapshot, err.to_string());
                 return LoopExit::Finished;
             }
         };
         let _ = updates.send(start_update);
+        info!("starting reference playback");
         let mut player = match ReferencePlayer::new(&self.reference) {
             Ok(player) => player,
             Err(err) => {
+                error!(error = %err, "failed to create reference player");
                 self.engine.stop(snapshot);
                 emit_error(updates, snapshot, err.to_string());
                 return LoopExit::Finished;
             }
         };
         if let Err(err) = player.play() {
+            error!(error = %err, "failed to start reference playback");
             self.engine.stop(snapshot);
             emit_error(updates, snapshot, err.to_string());
             return LoopExit::Finished;
         }
+        info!("recording session active; entering drive loop");
         self.drive(commands, updates, snapshot, &mut player)
     }
 
@@ -527,18 +639,22 @@ impl EngineRunner {
             if let Some(command) = poll_command(commands) {
                 match command {
                     SessionCommand::Shutdown => {
+                        info!("shutdown command received");
                         let update = self.engine.stop(snapshot);
                         player.stop();
                         let _ = updates.send(update);
                         return LoopExit::Shutdown;
                     }
                     SessionCommand::Stop => {
+                        info!("stop command received");
                         let update = self.engine.stop(snapshot);
                         player.stop();
                         let _ = updates.send(update);
                         return LoopExit::Finished;
                     }
-                    SessionCommand::Start => {}
+                    SessionCommand::Start => {
+                        debug!("start command received while already recording");
+                    }
                 }
             }
             match self.engine.poll(snapshot) {
@@ -547,6 +663,7 @@ impl EngineRunner {
                 }
                 Ok(None) => {}
                 Err(err) => {
+                    error!(error = %err, "capture engine error during poll");
                     self.engine.stop(snapshot);
                     player.stop();
                     emit_error(updates, snapshot, err.to_string());

@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
+use tracing::{error, info};
 
 use crate::audio::{decoder, resample};
 use crate::types::AudioData;
@@ -245,6 +246,13 @@ impl SessionConfig {
 /// Primary orchestration entry point for the pronunciation pipeline.
 pub fn run_session(config: SessionConfig) -> Result<SessionRuntime> {
     validate_config(&config)?;
+    info!(
+        reference = %config.reference_wav.display(),
+        assets_root = %config.assets_root.display(),
+        latency_budget_ms = config.latency_budget_ms,
+        ui_enabled = config.ui_enabled,
+        "session config validated; creating runtime"
+    );
     session::SessionRuntime::new(config)
 }
 
@@ -292,13 +300,15 @@ fn validate_config(config: &SessionConfig) -> Result<()> {
 
 pub(super) fn load_clip(path: &Path) -> Result<RecordedClip> {
     if !path.exists() {
-        return Err(PronunciationError::new(format!(
-            "audio file {:?} does not exist",
-            path
-        )));
+        let err_msg = format!("audio file {:?} does not exist", path);
+        error!(path = %path.display(), "{}", err_msg);
+        return Err(PronunciationError::new(err_msg));
     }
-    let audio =
-        decoder::decode_audio(path).map_err(|err| PronunciationError::new(err.to_string()))?;
+    let audio = decoder::decode_audio(path).map_err(|err| {
+        let err_msg = err.to_string();
+        error!(path = %path.display(), error = %err_msg, "failed to decode audio file");
+        PronunciationError::new(err_msg)
+    })?;
     clip_from_audio(audio)
 }
 
