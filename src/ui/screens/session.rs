@@ -94,6 +94,7 @@ impl SessionApp {
             ui.horizontal(|ui| {
                 let strip = ControlStrip {
                     is_recording: self.snapshot.recording,
+                    reference_playing: self.snapshot.reference_playing,
                     latency_ms: self.snapshot.latency_ms,
                     latency_budget_ms: self.latency_budget_ms,
                 };
@@ -139,6 +140,9 @@ impl SessionApp {
         if actions.replay_reference {
             self.replay_reference();
         }
+        if actions.stop_replay {
+            self.stop_replay();
+        }
     }
 
     fn toggle_recording(&mut self) {
@@ -151,13 +155,13 @@ impl SessionApp {
     }
 
     fn replay_reference(&mut self) {
-        if self.snapshot.recording {
-            if let Err(err) = self.controller.stop() {
-                self.control_error = Some(err.to_string());
-                return;
-            }
-        }
-        self.handle_control_result(self.controller.start());
+        // Replay reference works whether recording is active or not
+        // The player is kept alive at the EngineRunner level
+        self.handle_control_result(self.controller.replay_reference());
+    }
+
+    fn stop_replay(&mut self) {
+        self.handle_control_result(self.controller.stop_replay());
     }
 
     fn handle_control_result(&mut self, result: SessionResult<()>) {
@@ -280,12 +284,14 @@ impl eframe::App for SessionApp {
 struct ControlActions {
     toggle_recording: bool,
     replay_reference: bool,
+    stop_replay: bool,
 }
 
 impl ControlActions {
     fn merge(&mut self, other: ControlActions) {
         self.toggle_recording |= other.toggle_recording;
         self.replay_reference |= other.replay_reference;
+        self.stop_replay |= other.stop_replay;
     }
 }
 
@@ -294,6 +300,7 @@ impl From<ControlStripOutput> for ControlActions {
         ControlActions {
             toggle_recording: output.toggle_recording,
             replay_reference: output.replay_reference,
+            stop_replay: output.stop_replay,
         }
     }
 }

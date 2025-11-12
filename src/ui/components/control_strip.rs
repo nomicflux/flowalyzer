@@ -4,10 +4,12 @@ use eframe::egui;
 pub struct ControlStripOutput {
     pub toggle_recording: bool,
     pub replay_reference: bool,
+    pub stop_replay: bool,
 }
 
 pub struct ControlStrip {
     pub is_recording: bool,
+    pub reference_playing: bool,
     pub latency_ms: f32,
     pub latency_budget_ms: u32,
 }
@@ -19,8 +21,14 @@ impl ControlStrip {
             output.toggle_recording = true;
         }
         ui.separator();
-        if replay_button(ui, self.is_recording) {
-            output.replay_reference = true;
+        if self.reference_playing {
+            if stop_replay_button(ui) {
+                output.stop_replay = true;
+            }
+        } else {
+            if replay_button(ui, self.is_recording) {
+                output.replay_reference = true;
+            }
         }
         ui.separator();
         latency_badge(ui, self.latency_ms, self.latency_budget_ms);
@@ -51,6 +59,12 @@ fn replay_button(ui: &mut egui::Ui, is_recording: bool) -> bool {
         }
     });
     clicked
+}
+
+fn stop_replay_button(ui: &mut egui::Ui) -> bool {
+    ui.button("Stop Replay")
+        .on_hover_text("Stop the reference audio playback.")
+        .clicked()
 }
 
 fn latency_badge(ui: &mut egui::Ui, latency_ms: f32, budget_ms: u32) {

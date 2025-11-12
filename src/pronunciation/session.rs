@@ -289,6 +289,14 @@ impl SessionController {
         self.send(SessionCommand::Stop, "stop session")
     }
 
+    pub fn replay_reference(&self) -> Result<()> {
+        self.send(SessionCommand::ReplayReference, "replay reference")
+    }
+
+    pub fn stop_replay(&self) -> Result<()> {
+        self.send(SessionCommand::StopReplay, "stop replay")
+    }
+
     pub fn shutdown(&self) -> Result<()> {
         self.send(SessionCommand::Shutdown, "shutdown session")
     }
@@ -594,6 +602,7 @@ struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
     reference: RecordedClip,
     initial_snapshot: SessionSnapshot,
+    player: Option<ReferencePlayer>,
 }
 
 impl EngineRunner {
@@ -659,6 +668,7 @@ impl EngineRunner {
             engine,
             reference,
             initial_snapshot,
+            player: None,
         })
     }
 
@@ -668,6 +678,12 @@ impl EngineRunner {
         let _ = updates.send(snapshot.clone());
         while let Ok(command) = commands.recv() {
             match command {
+                SessionCommand::ReplayReference => {
+                    self.handle_replay_reference(&updates, &mut snapshot);
+                }
+                SessionCommand::StopReplay => {
+                    self.handle_stop_replay(&updates, &mut snapshot);
+                }
                 SessionCommand::Start => {
                     info!("received start command");
                     match self.handle_start(&commands, &updates, &mut snapshot) {
@@ -689,6 +705,51 @@ impl EngineRunner {
         info!("session runtime thread exiting");
     }
 
+    fn get_or_create_player(&mut self) -> Result<&mut ReferencePlayer> {
+        if self.player.is_none() {
+            self.player = Some(ReferencePlayer::new(&self.reference)?);
+        }
+        Ok(self.player.as_mut().unwrap())
+    }
+
+    fn handle_replay_reference(
+        &mut self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+    ) {
+        info!("replay reference command received");
+        match self.get_or_create_player() {
+            Ok(player) => {
+                player.stop();
+                if let Err(err) = player.play() {
+                    error!(error = %err, "failed to replay reference");
+                    snapshot.error = Some(err.to_string());
+                } else {
+                    snapshot.reference_playing = true;
+                }
+                let _ = updates.send(snapshot.clone());
+            }
+            Err(err) => {
+                error!(error = %err, "failed to get player for replay");
+                snapshot.error = Some(err.to_string());
+                let _ = updates.send(snapshot.clone());
+            }
+        }
+    }
+
+    fn handle_stop_replay(
+        &mut self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+    ) {
+        info!("stop replay command received");
+        if let Some(player) = self.player.as_mut() {
+            player.stop();
+            snapshot.reference_playing = false;
+            let _ = updates.send(snapshot.clone());
+        }
+    }
+
     fn handle_start(
         &mut self,
         commands: &Receiver<SessionCommand>,
@@ -706,7 +767,7 @@ impl EngineRunner {
         };
         let _ = updates.send(start_update);
         info!("starting reference playback");
-        let mut player = match ReferencePlayer::new(&self.reference) {
+        let player = match self.get_or_create_player() {
             Ok(player) => player,
             Err(err) => {
                 error!(error = %err, "failed to create reference player");
@@ -722,7 +783,7 @@ impl EngineRunner {
             return LoopExit::Finished;
         }
         info!("recording session active; entering drive loop");
-        self.drive(commands, updates, snapshot, &mut player)
+        self.drive(commands, updates, snapshot)
     }
 
     fn drive(
@@ -730,7 +791,6 @@ impl EngineRunner {
         commands: &Receiver<SessionCommand>,
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
-        player: &mut ReferencePlayer,
     ) -> LoopExit {
         loop {
             if let Some(command) = poll_command(commands) {
@@ -738,19 +798,29 @@ impl EngineRunner {
                     SessionCommand::Shutdown => {
                         info!("shutdown command received");
                         let update = self.engine.stop(snapshot);
-                        player.stop();
+                        if let Some(player) = self.player.as_mut() {
+                            player.stop();
+                        }
                         let _ = updates.send(update);
                         return LoopExit::Shutdown;
                     }
                     SessionCommand::Stop => {
                         info!("stop command received");
                         let update = self.engine.stop(snapshot);
-                        player.stop();
+                        if let Some(player) = self.player.as_mut() {
+                            player.stop();
+                        }
                         let _ = updates.send(update);
                         return LoopExit::Finished;
                     }
                     SessionCommand::Start => {
                         debug!("start command received while already recording");
+                    }
+                    SessionCommand::ReplayReference => {
+                        self.handle_replay_reference(updates, snapshot);
+                    }
+                    SessionCommand::StopReplay => {
+                        self.handle_stop_replay(updates, snapshot);
                     }
                 }
             }
@@ -762,7 +832,9 @@ impl EngineRunner {
                 Err(err) => {
                     error!(error = %err, "capture engine error during poll");
                     self.engine.stop(snapshot);
-                    player.stop();
+                    if let Some(player) = self.player.as_mut() {
+                        player.stop();
+                    }
                     emit_error(updates, snapshot, err.to_string());
                     return LoopExit::Finished;
                 }
@@ -862,5 +934,7 @@ impl ReferencePlayer {
 enum SessionCommand {
     Start,
     Stop,
+    ReplayReference,
+    StopReplay,
     Shutdown,
 }
