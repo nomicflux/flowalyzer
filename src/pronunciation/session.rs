@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, OutputStreamHandle, Sink};
@@ -47,7 +47,7 @@ pub struct SessionHandle {
     pending: RefCell<VecDeque<SessionSnapshot>>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SessionSnapshot {
     pub alignment: AlignmentReport,
     pub scores: PronunciationScores,
@@ -55,6 +55,21 @@ pub struct SessionSnapshot {
     pub reference_playing: bool,
     pub latency_ms: f32,
     pub error: Option<String>,
+    pub initializing: bool,
+}
+
+impl Default for SessionSnapshot {
+    fn default() -> Self {
+        Self {
+            alignment: AlignmentReport::default(),
+            scores: PronunciationScores::default(),
+            recording: false,
+            reference_playing: false,
+            latency_ms: 0.0,
+            error: None,
+            initializing: true,
+        }
+    }
 }
 
 impl SessionRuntime {
@@ -70,25 +85,52 @@ impl SessionRuntime {
         let (update_tx, update_rx) = channel();
         let join = thread::Builder::new()
             .name("session-runtime".to_string())
-            .spawn(move || match EngineRunner::build(thread_config) {
-                Ok(runner) => runner.run(command_rx, update_tx),
-                Err(err) => {
-                    error!(error = %err, "failed to construct session engine");
-                    let error_snapshot =
-                        SessionSnapshot::default().with_error_message(err.to_string());
-                    let _ = update_tx.send(error_snapshot);
+            .spawn(move || {
+                info!("runtime thread started; sending initializing snapshot");
+                let initializing_snapshot = SessionSnapshot::default();
+                let _ = update_tx.send(initializing_snapshot);
+                match EngineRunner::build(thread_config) {
+                    Ok(runner) => runner.run(command_rx, update_tx),
+                    Err(err) => {
+                        error!(error = %err, "failed to construct session engine");
+                        let error_snapshot =
+                            SessionSnapshot::default().with_error_message(err.to_string());
+                        let _ = update_tx.send(error_snapshot);
+                    }
                 }
             })
             .map_err(|err| {
                 error!(error = %err, "failed to spawn session runtime thread");
                 PronunciationError::new(err.to_string())
             })?;
-        info!("session runtime thread spawned");
+        info!("session runtime thread spawned; waiting for complete snapshot");
+        let timeout = Duration::from_secs(60);
+        let start = Instant::now();
+        let initial = loop {
+            if start.elapsed() > timeout {
+                error!("timeout waiting for complete snapshot from runtime thread");
+                break SessionSnapshot::default()
+                    .with_error_message("timeout waiting for engine initialization".to_string());
+            }
+            match update_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(snapshot) => {
+                    if !snapshot.initializing {
+                        info!("received complete snapshot from runtime thread");
+                        break snapshot;
+                    } else {
+                        info!("received initializing snapshot; waiting for complete snapshot");
+                    }
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
+        };
         Ok(Self {
             config,
             controller: SessionController { tx: command_tx },
             updates: Some(update_rx),
-            initial: SessionSnapshot::default(),
+            initial,
             join: Some(join),
             auto_shutdown: true,
         })
@@ -231,6 +273,11 @@ impl SessionSnapshot {
         self.error = Some(message);
         self
     }
+
+    pub fn with_initializing(mut self, initializing: bool) -> Self {
+        self.initializing = initializing;
+        self
+    }
 }
 
 impl SessionController {
@@ -296,7 +343,28 @@ pub mod engine {
             capture: C,
         ) -> Result<Self> {
             let extractor = FeatureExtractor::new();
-            let reference_features = extractor.extract(&reference)?;
+            info!(
+                samples = reference.samples.len(),
+                duration_secs = reference.duration.as_secs_f64(),
+                "starting feature extraction for reference audio"
+            );
+            let start = Instant::now();
+            let reference_features = extractor.extract(&reference).map_err(|err| {
+                let elapsed = start.elapsed();
+                error!(
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    error = %err,
+                    "feature extraction failed"
+                );
+                err
+            })?;
+            let elapsed = start.elapsed();
+            info!(
+                elapsed_secs = elapsed.as_secs_f64(),
+                energy_frames = reference_features.energy.len(),
+                pitch_frames = reference_features.pitch_contour.len(),
+                "feature extraction completed"
+            );
             Ok(Self {
                 capture,
                 extractor,
@@ -548,16 +616,45 @@ impl EngineRunner {
             "creating live capture source"
         );
         let capture = engine::LiveCaptureSource::new(&config.capture);
+        info!("creating session engine (this will extract features from reference)");
+        let build_start = Instant::now();
         let engine = engine::SessionEngine::new(
             reference.clone(),
             config.alignment,
             config.latency_budget_ms,
             capture,
-        )?;
+        )
+        .map_err(|err| {
+            let elapsed = build_start.elapsed();
+            error!(
+                elapsed_secs = elapsed.as_secs_f64(),
+                error = %err,
+                "failed to create session engine"
+            );
+            err
+        })?;
+        let engine_elapsed = build_start.elapsed();
+        info!(
+            elapsed_secs = engine_elapsed.as_secs_f64(),
+            "session engine created successfully"
+        );
+        info!("computing initial reference alignment");
+        let alignment_start = Instant::now();
         let initial_alignment = engine.reference_alignment();
+        let alignment_elapsed = alignment_start.elapsed();
+        info!(
+            elapsed_secs = alignment_elapsed.as_secs_f64(),
+            phonemes = initial_alignment.phonemes.len(),
+            "initial reference alignment computed"
+        );
         let initial_snapshot = SessionSnapshot::default()
-            .with_alignment(initial_alignment, PronunciationScores::default());
-        info!("engine runner built; initial alignment computed");
+            .with_alignment(initial_alignment, PronunciationScores::default())
+            .with_initializing(false);
+        let total_elapsed = build_start.elapsed();
+        info!(
+            total_elapsed_secs = total_elapsed.as_secs_f64(),
+            "engine runner built; ready to send initial snapshot"
+        );
         Ok(Self {
             engine,
             reference,

@@ -1,5 +1,7 @@
 use aus::analysis;
 use ndarray::Array1;
+use std::time::Instant;
+use tracing::info;
 
 use crate::audio::resample;
 use crate::pronunciation::{PronunciationError, RecordedClip, Result};
@@ -14,15 +16,95 @@ pub(super) fn extract_pitch_contour(
     clip: &RecordedClip,
     frame_count: usize,
 ) -> Result<Array1<f32>> {
+    info!("ensuring sample rate for pitch extraction");
+    let start = Instant::now();
     let samples = ensure_sample_rate(clip)?;
+    let resample_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = resample_elapsed.as_secs_f64(),
+        samples = samples.len(),
+        "sample rate ensured for pitch"
+    );
+
+    info!("converting to f64 for pitch");
+    let start = Instant::now();
     let audio: Vec<f64> = samples.into_iter().map(|s| s as f64).collect();
+    let convert_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = convert_elapsed.as_secs_f64(),
+        "conversion to f64 complete for pitch"
+    );
+
+    // frame_len = 400 samples = 25ms at 16kHz, matching STFT window size
+    // This ensures pitch frames align with mel spectrogram frames for consistent
+    // feature alignment. The aus wrapper uses default win_length=frame_len/2 and
+    // hop_length=frame_len/4, which is appropriate for pitch estimation.
     let frame_len = frame_length_samples();
-    let (_timestamps, pitches, voiced_flags, _confidence) =
-        analysis::pyin_pitch_estimator(&audio, TARGET_SAMPLE_RATE, FREQ_MIN, FREQ_MAX, frame_len);
+    
+    info!(
+        frame_len,
+        audio_samples = audio.len(),
+        freq_min = FREQ_MIN,
+        freq_max = FREQ_MAX,
+        "extracting pitch contour"
+    );
+
+    let start = Instant::now();
+    // Call pyin_pitch_estimator once on full audio. With opt-level=3 for aus/pyin
+    // in dev mode (see Cargo.toml), this meets performance targets:
+    // - <1s for 1s audio
+    // - <10s for 10s audio
+    let (_timestamps, pitches, voiced_flags, _confidence) = analysis::pyin_pitch_estimator(
+        &audio,
+        TARGET_SAMPLE_RATE,
+        FREQ_MIN,
+        FREQ_MAX,
+        frame_len,
+    );
+    let pyin_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = pyin_elapsed.as_secs_f64(),
+        pitch_frames = pitches.len(),
+        "pitch extraction completed"
+    );
+
+    info!("normalizing pitch contour");
+    let start = Instant::now();
     let contour = normalise_contour(&pitches, &voiced_flags);
+    let normalize_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = normalize_elapsed.as_secs_f64(),
+        "pitch contour normalized"
+    );
+
+    info!("filling missing pitch values");
+    let start = Instant::now();
     let filled = fill_missing(&contour);
+    let fill_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = fill_elapsed.as_secs_f64(),
+        "missing pitch values filled"
+    );
+
+    info!("smoothing pitch contour");
+    let start = Instant::now();
     let smoothed = smooth(&filled, SMOOTH_WINDOW);
+    let smooth_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = smooth_elapsed.as_secs_f64(),
+        "pitch contour smoothed"
+    );
+
+    info!("aligning pitch contour to frames");
+    let start = Instant::now();
     let aligned = align_to_frames(&smoothed, frame_count);
+    let align_elapsed = start.elapsed();
+    info!(
+        elapsed_secs = align_elapsed.as_secs_f64(),
+        aligned_frames = aligned.len(),
+        "pitch contour aligned"
+    );
+
     Ok(Array1::from(aligned))
 }
 

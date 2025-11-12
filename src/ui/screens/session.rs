@@ -102,9 +102,16 @@ impl SessionApp {
                 ui.separator();
                 self.show_scores(ui);
             });
-            ui.label("Shortcuts: Space toggles recording · R replays the reference clip.");
-            ui.label(self.playback_status());
-            self.show_latency_guidance(ui);
+            if self.snapshot.initializing {
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 160, 20),
+                    "Initializing engine... Please wait.",
+                );
+            } else {
+                ui.label("Shortcuts: Space toggles recording · R replays the reference clip.");
+                ui.label(self.playback_status());
+                self.show_latency_guidance(ui);
+            }
             self.error_banner(ui);
             if let Some(message) = &self.control_error {
                 ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);

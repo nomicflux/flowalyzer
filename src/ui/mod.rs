@@ -11,7 +11,7 @@ pub fn launch_ui(runtime: SessionRuntime) -> Result<()> {
     let app = screens::session::SessionApp::new(handle);
     let options = NativeOptions::default();
     eframe::run_native(&title, options, Box::new(move |_cc| Box::new(app)))
-        .map_err(|err| PronunciationError::new(err.to_string()))
+    .map_err(|err| PronunciationError::new(err.to_string()))
 }
 
 fn window_title(config: &SessionConfig) -> String {

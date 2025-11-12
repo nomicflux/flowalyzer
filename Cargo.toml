@@ -30,3 +30,9 @@ tempfile = "3"
 
 [patch.crates-io]
 whisper-rs-sys = { path = "vendor/whisper-rs-sys" }
+
+[profile.dev.package.aus]
+opt-level = 3
+
+[profile.dev.package.pyin]
+opt-level = 3
