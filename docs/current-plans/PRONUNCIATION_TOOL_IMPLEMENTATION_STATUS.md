@@ -31,9 +31,12 @@
 - Feature extraction (`src/pronunciation/features/`) still produces normalized mel/flux/energy/MFCC (+Δ/+ΔΔ) tensors via `aus` (25 ms Hann window, 10 ms hop, 80 mel bands, 13 coefficients) used by the placeholder alignment.
 - Metrics (`src/pronunciation/metrics/mod.rs`) aggregate placeholder alignment data into timing, articulation, and intonation scores; per-segment diagnostics feed the visualisation.
 - UI architecture (`src/ui/`) renders waveform, spectrogram, and timeline views driven by `SessionApp`, now populated by the audio-only alignment report.
-- Integration smoke coverage lives in `tests/session_smoke.rs`, synthesising WAV fixtures and ensuring the session pipeline runs without UI enabled.
+- Runtime lifecycle tests (`tests/session_runtime.rs`) and smoke coverage (`tests/session_smoke.rs`) exercise the streaming alignment pipeline via injected commands; the UI is the only supported execution path.
+- `SessionEngine` (`pronunciation::session::engine`) encapsulates capture → features → alignment logic with injectable capture sources; `MockCapture` powers deterministic tests.
 - Status doc updates must accompany each completed phase with dated notes and executed test summaries.
 - Session orchestration uses `SessionRuntime` (Phase 3) to stream live capture chunks through incremental alignment, exposing `SessionHandle` to the UI for continuous feedback and latency telemetry. CLI now launches the runtime directly via `pronunciation session`.
+- Control strip (`src/ui/components/control_strip.rs`) exposes accessible record/replay controls, keyboard shortcuts (Space, R), playback status, and latency guidance while colour-coding the active budget window.
+- Waveform, spectrogram, pitch, and phoneme timeline components render rolling four-second windows with contour overlays and tooltip metadata so timing, articulation, and intonation gaps stay visible in-session.
 
 ## Issues Encountered
 - (2025-11-11) Building the vendored `whisper-rs-sys` crate during `cargo test` required elevated file access to macOS SDK headers; re-ran the suite with `required_permissions: ['all']` to satisfy the sandbox guidance.
@@ -42,4 +45,7 @@
 - (2025-11-11) Phase 1 – Session-only audio baseline reset: Removed transcript assets, collapsed the CLI to the `session` flow, introduced placeholder audio-vs-audio comparison, and updated smoke coverage (`tests/session_smoke.rs`). Commands executed: `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test` (all passed).
 - (2025-11-11) Phase 2 – Real-time audio alignment & scoring: Externalised DTW cost weights to `assets/config/alignment_weights.json`, injected alignment configuration through `SessionConfig`, strengthened alignment/metrics tests (`tests/alignment.rs`, `tests/metrics.rs`), and confirmed the pipeline with `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test` (all passed).
 - (2025-11-12) Phase 3 – Session runtime capture: Removed `SessionConfig::learner_wav`, added live `SessionRuntime` with `LiveCapture`, streaming alignment updates, reference playback control, and updated CLI/UI integration. Smoke + full suite verified via `cargo fmt`, `cargo test`.
+- (2025-11-12) Phase 3 – UI focus: Implemented rolling visualisation windows, pitch contour overlays, control strip accessibility, latency guidance, and headless UI/state tests (`tests/ui/session_focus.rs`, `tests/ui/session_snapshots.rs`). Commands executed: `cargo fmt`, `cargo test` (suite green).
+- (2025-11-12) Phase 3 – Session lifecycle fix: Removed the headless fallback, ensured `SessionRuntime` remains active while the UI runs, added regression tests (`tests/session_runtime.rs`), and documented the interactive-only contract. Commands executed: `cargo fmt`, `cargo test`.
+- (2025-11-12) Phase 3 – Engine modularisation: Introduced `SessionEngine` with injectable capture sources, rewrote smoke tests to use `MockCapture`, and updated docs to reflect the interactive-only testing strategy. Commands executed: `cargo fmt`, `cargo test`.
 

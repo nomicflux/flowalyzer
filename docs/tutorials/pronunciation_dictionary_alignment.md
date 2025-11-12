@@ -48,7 +48,7 @@ This tutorial describes the intermediate, transcript-free alignment approach use
 
 ## Testing
 
-- `tests/session_smoke.rs` synthesises short sine waves, runs `run_session` headlessly, and asserts that the placeholder alignment returns at least one segment with finite scores.
+- `tests/session_smoke.rs` synthesises short sine waves, feeds them into `SessionEngine` via a mock capture source, and asserts that the alignment pipeline returns at least one segment with finite scores.
 - Additional unit tests can target `AudioAligner` helpers (e.g., MFCC similarity, energy peak detection) if finer-grained coverage is required.
 
 ## Roadmap

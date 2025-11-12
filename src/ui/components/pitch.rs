@@ -1,5 +1,7 @@
 use eframe::egui::{self, Color32, Stroke};
 
+const CONTOUR_DELTA_WARN: f32 = 0.2;
+
 pub struct PitchView<'a> {
     pub reference: &'a [f32],
     pub learner: &'a [f32],
@@ -31,6 +33,20 @@ impl<'a> PitchView<'a> {
             max,
             Color32::from_rgb(250, 120, 120),
         );
+        draw_contour_delta(
+            &painter,
+            response.rect,
+            self.reference,
+            self.learner,
+            min,
+            max,
+        );
+        response.on_hover_ui(|ui| {
+            ui.label(format!(
+                "Mean contour delta: {:.2}",
+                average_contour_delta(self.reference, self.learner)
+            ));
+        });
     }
 }
 
@@ -99,4 +115,51 @@ fn draw_point(
     let y_ratio = (value - min) / range;
     let pos = egui::pos2(rect.center().x, rect.bottom() - y_ratio * rect.height());
     painter.circle_filled(pos, 4.0, color);
+}
+
+fn draw_contour_delta(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    reference: &[f32],
+    learner: &[f32],
+    min: f32,
+    max: f32,
+) {
+    let length = reference.len().min(learner.len());
+    if length < 2 {
+        return;
+    }
+    let range = (max - min).max(1e-6);
+    let last_index = (length - 1) as f32;
+    for idx in 0..length {
+        let diff = (reference[idx] - learner[idx]).abs();
+        if diff < CONTOUR_DELTA_WARN {
+            continue;
+        }
+        let x_ratio = idx as f32 / last_index;
+        let x = rect.left() + x_ratio * rect.width();
+        let height = (diff / range).clamp(0.0, 1.0) * rect.height();
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(x - 1.0, rect.bottom() - height),
+            egui::pos2(x + 1.0, rect.bottom()),
+        );
+        painter.rect_filled(
+            bar,
+            0.0,
+            Color32::from_rgba_premultiplied(255, 110, 110, 120),
+        );
+    }
+}
+
+fn average_contour_delta(reference: &[f32], learner: &[f32]) -> f32 {
+    let length = reference.len().min(learner.len());
+    if length == 0 {
+        return 0.0;
+    }
+    let total: f32 = reference
+        .iter()
+        .zip(learner.iter())
+        .map(|(a, b)| (a - b).abs())
+        .sum();
+    total / length as f32
 }

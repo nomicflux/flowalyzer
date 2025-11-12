@@ -1,18 +1,20 @@
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::ops::RangeInclusive;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rodio::buffer::SamplesBuffer;
 use rodio::{OutputStream, OutputStreamHandle, Sink};
 
-use crate::audio::capture::{CaptureConfig, LiveCapture};
+use crate::audio::capture::CaptureConfig;
 use crate::audio::playback::duplicate_to_stereo;
-use crate::audio::resample;
 
 use super::alignment::AudioAligner;
 use super::features::FeatureExtractor;
 use super::metrics::MetricCalculator;
+use super::validate_config;
 use super::{
     load_clip, AlignmentReport, PronunciationError, PronunciationFeatures, PronunciationScores,
     RecordedClip, Result, SessionConfig, TARGET_SAMPLE_RATE,
@@ -32,6 +34,7 @@ pub struct SessionRuntime {
     updates: Option<Receiver<SessionSnapshot>>,
     initial: SessionSnapshot,
     join: Option<JoinHandle<()>>,
+    auto_shutdown: bool,
 }
 
 pub struct SessionHandle {
@@ -40,6 +43,7 @@ pub struct SessionHandle {
     updates: Receiver<SessionSnapshot>,
     initial: SessionSnapshot,
     join: Option<JoinHandle<()>>,
+    pending: RefCell<VecDeque<SessionSnapshot>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -54,16 +58,28 @@ pub struct SessionSnapshot {
 
 impl SessionRuntime {
     pub fn new(config: SessionConfig) -> Result<Self> {
-        let worker = Worker::prepare(&config)?;
+        validate_config(&config)?;
+        let thread_config = config.clone();
         let (command_tx, command_rx) = channel();
         let (update_tx, update_rx) = channel();
-        let join = worker.spawn(command_rx, update_tx)?;
+        let join = thread::Builder::new()
+            .name("session-runtime".to_string())
+            .spawn(move || match EngineRunner::build(thread_config) {
+                Ok(runner) => runner.run(command_rx, update_tx),
+                Err(err) => {
+                    let error_snapshot =
+                        SessionSnapshot::default().with_error_message(err.to_string());
+                    let _ = update_tx.send(error_snapshot);
+                }
+            })
+            .map_err(|err| PronunciationError::new(err.to_string()))?;
         Ok(Self {
             config,
             controller: SessionController { tx: command_tx },
             updates: Some(update_rx),
             initial: SessionSnapshot::default(),
             join: Some(join),
+            auto_shutdown: true,
         })
     }
 
@@ -86,6 +102,7 @@ impl SessionRuntime {
     }
 
     pub fn into_handle(mut self) -> SessionHandle {
+        self.auto_shutdown = false;
         let updates = self
             .updates
             .take()
@@ -96,23 +113,27 @@ impl SessionRuntime {
             updates,
             initial: self.initial.clone(),
             join: self.join.take(),
+            pending: RefCell::new(VecDeque::new()),
         }
     }
 
     pub fn launch(self) -> Result<()> {
-        if self.config.ui_enabled {
-            crate::ui::launch_ui(self)
-        } else {
-            run_headless(self)
+        if !self.config.ui_enabled {
+            return Err(PronunciationError::new(
+                "interactive session must enable UI; headless mode is not supported",
+            ));
         }
+        crate::ui::launch_ui(self)
     }
 }
 
 impl Drop for SessionRuntime {
     fn drop(&mut self) {
-        let _ = self.controller.shutdown();
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
+        if self.auto_shutdown {
+            let _ = self.controller.shutdown();
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
         }
     }
 }
@@ -131,7 +152,28 @@ impl SessionHandle {
     }
 
     pub fn try_recv(&self) -> Option<SessionSnapshot> {
-        self.updates.try_recv().ok()
+        self.extend_pending();
+        self.pending.borrow_mut().pop_front()
+    }
+
+    pub fn drain_snapshots(&self) -> Vec<SessionSnapshot> {
+        self.extend_pending();
+        self.pending.borrow_mut().drain(..).collect()
+    }
+
+    fn extend_pending(&self) {
+        let mut pending = self.pending.borrow_mut();
+        for snapshot in self.pull_updates() {
+            pending.push_back(snapshot);
+        }
+    }
+
+    fn pull_updates(&self) -> Vec<SessionSnapshot> {
+        let mut fresh = Vec::new();
+        while let Ok(snapshot) = self.updates.try_recv() {
+            fresh.push(snapshot);
+        }
+        fresh
     }
 }
 
@@ -200,271 +242,324 @@ impl SessionController {
     }
 }
 
-fn run_headless(runtime: SessionRuntime) -> Result<()> {
-    let controller = runtime.controller();
-    controller.start()?;
-    std::thread::sleep(Duration::from_secs(2));
-    controller.stop()?;
-    Ok(())
-}
-
-struct Worker {
-    reference: RecordedClip,
-    reference_features: PronunciationFeatures,
-    aligner: AudioAligner,
-    metrics: MetricCalculator,
-    extractor: FeatureExtractor,
-    capture: CaptureSettings,
-    latency_budget_ms: u32,
-    reference_samples: usize,
-}
-
 type CaptureSettings = super::CaptureSettings;
 
-impl Worker {
-    fn prepare(config: &SessionConfig) -> Result<Self> {
+pub mod engine {
+    use super::{
+        append_limited, min_required_samples, AlignmentReport, AudioAligner, CaptureSettings,
+        FeatureExtractor, MetricCalculator, PronunciationError, PronunciationFeatures,
+        PronunciationScores, RecordedClip, Result, SessionSnapshot, CAPTURE_POLL_MS,
+        TARGET_SAMPLE_RATE,
+    };
+    use crate::audio::capture::{CaptureConfig, LiveCapture};
+    use crate::audio::resample;
+    use crate::pronunciation::AlignmentWeights;
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    pub trait CaptureSource {
+        fn start(&mut self) -> Result<u32>;
+        fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>>;
+        fn stop(&mut self);
+    }
+
+    pub struct SessionEngine<C: CaptureSource> {
+        capture: C,
+        extractor: FeatureExtractor,
+        aligner: AudioAligner,
+        metrics: MetricCalculator,
+        reference_features: PronunciationFeatures,
+        learner_buffer: Vec<f32>,
+        reference_samples: usize,
+        latency_budget_ms: u32,
+        capture_sample_rate: Option<u32>,
+    }
+
+    impl<C: CaptureSource> SessionEngine<C> {
+        pub fn new(
+            reference: RecordedClip,
+            alignment: AlignmentWeights,
+            latency_budget_ms: u32,
+            capture: C,
+        ) -> Result<Self> {
+            let extractor = FeatureExtractor::new();
+            let reference_features = extractor.extract(&reference)?;
+            Ok(Self {
+                capture,
+                extractor,
+                aligner: AudioAligner::new(alignment),
+                metrics: MetricCalculator::new(),
+                reference_features,
+                learner_buffer: Vec::new(),
+                reference_samples: reference.samples.len(),
+                latency_budget_ms,
+                capture_sample_rate: None,
+            })
+        }
+
+        pub fn start(&mut self, snapshot: &mut SessionSnapshot) -> Result<SessionSnapshot> {
+            let sample_rate = self.capture.start()?;
+            self.capture_sample_rate = Some(sample_rate);
+            self.learner_buffer.clear();
+            *snapshot = snapshot.clone().with_recording(true, true);
+            Ok(snapshot.clone())
+        }
+
+        pub fn poll(&mut self, snapshot: &mut SessionSnapshot) -> Result<Option<SessionSnapshot>> {
+            let timeout = Duration::from_millis(CAPTURE_POLL_MS);
+            if let Some(chunk) = self.capture.recv_chunk(timeout) {
+                if let Some(update) = self.process_chunk(chunk)? {
+                    *snapshot = snapshot
+                        .clone()
+                        .with_alignment(update.alignment, update.scores)
+                        .with_recording(true, true)
+                        .with_latency(update.latency_ms, self.latency_budget_ms);
+                    return Ok(Some(snapshot.clone()));
+                }
+            }
+            Ok(None)
+        }
+
+        pub fn stop(&mut self, snapshot: &mut SessionSnapshot) -> SessionSnapshot {
+            self.capture.stop();
+            self.capture_sample_rate = None;
+            self.learner_buffer.clear();
+            *snapshot = snapshot.clone().with_recording(false, false);
+            snapshot.clone()
+        }
+
+        pub fn latency_budget_ms(&self) -> u32 {
+            self.latency_budget_ms
+        }
+
+        fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
+            let capture_rate = self
+                .capture_sample_rate
+                .ok_or_else(|| PronunciationError::new("capture stream not started"))?;
+            let resampled = resample::linear_resample(&chunk, capture_rate, TARGET_SAMPLE_RATE)
+                .map_err(|err| PronunciationError::new(err.to_string()))?;
+            let max_samples = self.max_samples();
+            append_limited(&mut self.learner_buffer, &resampled, max_samples);
+            if self.learner_buffer.len() < min_required_samples() {
+                return Ok(None);
+            }
+            let start = Instant::now();
+            let clip = RecordedClip::from_samples(self.learner_buffer.clone(), TARGET_SAMPLE_RATE);
+            let features = self.extractor.extract(&clip)?;
+            let alignment = self.aligner.align(&self.reference_features, &features)?;
+            let scores = self.metrics.score(&alignment)?;
+            let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
+            Ok(Some(SnapshotUpdate {
+                alignment,
+                scores,
+                latency_ms,
+            }))
+        }
+
+        fn max_samples(&self) -> usize {
+            self.reference_samples + TARGET_SAMPLE_RATE as usize / 2
+        }
+    }
+
+    struct SnapshotUpdate {
+        alignment: AlignmentReport,
+        scores: PronunciationScores,
+        latency_ms: f32,
+    }
+
+    pub struct LiveCaptureSource {
+        config: CaptureConfig,
+        live: Option<LiveCapture>,
+    }
+
+    impl LiveCaptureSource {
+        pub fn new(settings: &CaptureSettings) -> Self {
+            Self {
+                config: super::build_capture_config(settings),
+                live: None,
+            }
+        }
+    }
+
+    impl CaptureSource for LiveCaptureSource {
+        fn start(&mut self) -> Result<u32> {
+            let live = LiveCapture::start(&self.config)
+                .map_err(|err| PronunciationError::new(err.to_string()))?;
+            let sample_rate = live.sample_rate();
+            self.live = Some(live);
+            Ok(sample_rate)
+        }
+
+        fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>> {
+            self.live
+                .as_ref()
+                .and_then(|capture| capture.recv_chunk(timeout))
+        }
+
+        fn stop(&mut self) {
+            if let Some(capture) = self.live.take() {
+                capture.stop();
+            }
+        }
+    }
+
+    pub struct MockCapture {
+        sample_rate: u32,
+        chunks: VecDeque<Vec<f32>>,
+        started: bool,
+    }
+
+    impl MockCapture {
+        pub fn from_samples(sample_rate: u32, samples: Vec<f32>, chunk_len: usize) -> Self {
+            let mut chunks = VecDeque::new();
+            if chunk_len == 0 {
+                chunks.push_back(samples);
+            } else {
+                for chunk in samples.chunks(chunk_len) {
+                    chunks.push_back(chunk.to_vec());
+                }
+            }
+            Self {
+                sample_rate,
+                chunks,
+                started: false,
+            }
+        }
+    }
+
+    impl CaptureSource for MockCapture {
+        fn start(&mut self) -> Result<u32> {
+            self.started = true;
+            Ok(self.sample_rate)
+        }
+
+        fn recv_chunk(&mut self, _timeout: Duration) -> Option<Vec<f32>> {
+            if !self.started {
+                return None;
+            }
+            self.chunks.pop_front()
+        }
+
+        fn stop(&mut self) {
+            self.started = false;
+        }
+    }
+}
+
+struct EngineRunner {
+    engine: engine::SessionEngine<engine::LiveCaptureSource>,
+    reference: RecordedClip,
+}
+
+impl EngineRunner {
+    fn build(config: SessionConfig) -> Result<Self> {
         let reference = load_clip(&config.reference_wav)?;
-        let extractor = FeatureExtractor::new();
-        let reference_features = extractor.extract(&reference)?;
-        Ok(Self {
-            reference_samples: reference.samples.len(),
-            reference,
-            reference_features,
-            aligner: AudioAligner::new(config.alignment.clone()),
-            metrics: MetricCalculator::new(),
-            extractor,
-            capture: config.capture.clone(),
-            latency_budget_ms: config.latency_budget_ms,
-        })
+        let capture = engine::LiveCaptureSource::new(&config.capture);
+        let engine = engine::SessionEngine::new(
+            reference.clone(),
+            config.alignment,
+            config.latency_budget_ms,
+            capture,
+        )?;
+        Ok(Self { engine, reference })
     }
+}
 
-    fn spawn(
-        self,
-        commands: Receiver<SessionCommand>,
-        updates: Sender<SessionSnapshot>,
-    ) -> Result<JoinHandle<()>> {
-        thread::Builder::new()
-            .name("session-runtime".to_string())
-            .spawn(move || self.run(commands, updates))
-            .map_err(|err| PronunciationError::new(err.to_string()))
-    }
-
-    fn run(self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
+impl EngineRunner {
+    fn run(mut self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
         let mut snapshot = SessionSnapshot::default();
         let _ = updates.send(snapshot.clone());
         while let Ok(command) = commands.recv() {
             match command {
                 SessionCommand::Start => {
-                    match self.capture_loop(&commands, &updates, &mut snapshot) {
+                    match self.handle_start(&commands, &updates, &mut snapshot) {
                         LoopExit::Finished => {}
                         LoopExit::Shutdown => break,
                     }
                 }
                 SessionCommand::Stop => {
-                    snapshot = snapshot.with_recording(false, false);
-                    let _ = updates.send(snapshot.clone());
+                    let update = self.engine.stop(&mut snapshot);
+                    let _ = updates.send(update);
                 }
                 SessionCommand::Shutdown => break,
             }
         }
     }
 
-    fn capture_loop(
-        &self,
+    fn handle_start(
+        &mut self,
         commands: &Receiver<SessionCommand>,
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
     ) -> LoopExit {
-        match self.start_capture(snapshot, updates) {
-            Ok(mut context) => self.drive_capture(commands, &mut context),
-            Err(exit) => exit,
-        }
-    }
-
-    fn start_capture<'a>(
-        &'a self,
-        snapshot: &'a mut SessionSnapshot,
-        updates: &'a Sender<SessionSnapshot>,
-    ) -> std::result::Result<CaptureContext<'a>, LoopExit> {
-        let config = build_capture_config(&self.capture);
-        let capture = match LiveCapture::start(&config) {
-            Ok(stream) => stream,
+        let start_update = match self.engine.start(snapshot) {
+            Ok(update) => update,
             Err(err) => {
                 emit_error(updates, snapshot, err.to_string());
-                return Err(LoopExit::Finished);
+                return LoopExit::Finished;
             }
         };
+        let _ = updates.send(start_update);
         let mut player = match ReferencePlayer::new(&self.reference) {
             Ok(player) => player,
             Err(err) => {
+                self.engine.stop(snapshot);
                 emit_error(updates, snapshot, err.to_string());
-                return Err(LoopExit::Finished);
+                return LoopExit::Finished;
             }
         };
         if let Err(err) = player.play() {
+            self.engine.stop(snapshot);
             emit_error(updates, snapshot, err.to_string());
-            return Err(LoopExit::Finished);
+            return LoopExit::Finished;
         }
-        let mut context = CaptureContext::new(
-            capture,
-            player,
-            snapshot,
-            updates,
-            self.reference_samples + TARGET_SAMPLE_RATE as usize / 2,
-        );
-        context.set_state(true, true);
-        Ok(context)
+        self.drive(commands, updates, snapshot, &mut player)
     }
 
-    fn drive_capture(
-        &self,
+    fn drive(
+        &mut self,
         commands: &Receiver<SessionCommand>,
-        context: &mut CaptureContext<'_>,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+        player: &mut ReferencePlayer,
     ) -> LoopExit {
         loop {
-            if let Some(exit) = self.handle_commands(commands, context) {
-                return exit;
-            }
-            if let Some(exit) = self.consume_chunk(context) {
-                return exit;
-            }
-        }
-    }
-
-    fn consume_chunk(&self, context: &mut CaptureContext<'_>) -> Option<LoopExit> {
-        match context
-            .capture
-            .recv_chunk(Duration::from_millis(CAPTURE_POLL_MS))
-        {
-            Some(chunk) => match self.process_chunk(
-                chunk,
-                context.capture_rate,
-                &mut context.buffer,
-                context.max_samples,
-            ) {
-                Ok(Some(result)) => {
-                    context.apply_alignment(result, self.latency_budget_ms);
-                    None
+            if let Some(command) = poll_command(commands) {
+                match command {
+                    SessionCommand::Shutdown => {
+                        let update = self.engine.stop(snapshot);
+                        player.stop();
+                        let _ = updates.send(update);
+                        return LoopExit::Shutdown;
+                    }
+                    SessionCommand::Stop => {
+                        let update = self.engine.stop(snapshot);
+                        player.stop();
+                        let _ = updates.send(update);
+                        return LoopExit::Finished;
+                    }
+                    SessionCommand::Start => {}
                 }
-                Ok(None) => None,
+            }
+            match self.engine.poll(snapshot) {
+                Ok(Some(update)) => {
+                    let _ = updates.send(update);
+                }
+                Ok(None) => {}
                 Err(err) => {
-                    emit_error(context.updates, context.snapshot, err.to_string());
-                    context.stop();
-                    Some(LoopExit::Finished)
+                    self.engine.stop(snapshot);
+                    player.stop();
+                    emit_error(updates, snapshot, err.to_string());
+                    return LoopExit::Finished;
                 }
-            },
-            None => None,
-        }
-    }
-
-    fn handle_commands(
-        &self,
-        commands: &Receiver<SessionCommand>,
-        context: &mut CaptureContext<'_>,
-    ) -> Option<LoopExit> {
-        match poll_command(commands) {
-            Some(SessionCommand::Shutdown) => {
-                context.stop();
-                context.set_state(false, false);
-                Some(LoopExit::Shutdown)
             }
-            Some(SessionCommand::Stop) => {
-                context.stop();
-                context.set_state(false, false);
-                Some(LoopExit::Finished)
-            }
-            Some(SessionCommand::Start) | None => None,
         }
-    }
-
-    fn process_chunk(
-        &self,
-        chunk: Vec<f32>,
-        capture_rate: u32,
-        buffer: &mut Vec<f32>,
-        max_samples: usize,
-    ) -> Result<Option<ChunkResult>> {
-        let resampled = resample::linear_resample(&chunk, capture_rate, TARGET_SAMPLE_RATE)
-            .map_err(|err| PronunciationError::new(err.to_string()))?;
-        append_limited(buffer, &resampled, max_samples);
-        if buffer.len() < min_required_samples() {
-            return Ok(None);
-        }
-        let start = Instant::now();
-        let clip = RecordedClip::from_samples(buffer.clone(), TARGET_SAMPLE_RATE);
-        let features = self.extractor.extract(&clip)?;
-        let alignment = self.aligner.align(&self.reference_features, &features)?;
-        let scores = self.metrics.score(&alignment)?;
-        let latency = start.elapsed().as_secs_f32() * 1000.0;
-        Ok(Some(ChunkResult {
-            alignment,
-            scores,
-            latency_ms: latency,
-        }))
     }
 }
 
 enum LoopExit {
     Finished,
     Shutdown,
-}
-
-struct ChunkResult {
-    alignment: AlignmentReport,
-    scores: PronunciationScores,
-    latency_ms: f32,
-}
-
-struct CaptureContext<'a> {
-    capture: LiveCapture,
-    player: ReferencePlayer,
-    buffer: Vec<f32>,
-    snapshot: &'a mut SessionSnapshot,
-    updates: &'a Sender<SessionSnapshot>,
-    capture_rate: u32,
-    max_samples: usize,
-}
-
-impl<'a> CaptureContext<'a> {
-    fn new(
-        capture: LiveCapture,
-        player: ReferencePlayer,
-        snapshot: &'a mut SessionSnapshot,
-        updates: &'a Sender<SessionSnapshot>,
-        max_samples: usize,
-    ) -> Self {
-        Self {
-            capture_rate: capture.sample_rate(),
-            capture,
-            player,
-            buffer: Vec::new(),
-            snapshot,
-            updates,
-            max_samples,
-        }
-    }
-
-    fn set_state(&mut self, recording: bool, playing: bool) {
-        let next = self.snapshot.clone().with_recording(recording, playing);
-        let _ = self.updates.send(next.clone());
-        *self.snapshot = next;
-    }
-
-    fn apply_alignment(&mut self, result: ChunkResult, budget_ms: u32) {
-        let next = self
-            .snapshot
-            .clone()
-            .with_alignment(result.alignment, result.scores)
-            .with_recording(true, true)
-            .with_latency(result.latency_ms, budget_ms);
-        let _ = self.updates.send(next.clone());
-        *self.snapshot = next;
-    }
-
-    fn stop(&mut self) {
-        self.player.stop();
-        self.capture.stop();
-    }
 }
 
 fn build_capture_config(settings: &CaptureSettings) -> CaptureConfig {

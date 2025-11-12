@@ -92,7 +92,7 @@ _Reminder: run the FULL test suite and update the status document. STOP and awai
 ### Tasks
 - Tune capture/playback pipeline to guarantee ≤200 ms round-trip latency with device selection, buffer controls, and resilience to CoreAudio errors.
 - Finalise UI interactions: immediate waveform/spectrogram updates, grading badges, per-metric tooltips, and replay toggles—all within the same session window.
-- Add automated UI/state tests (serialization or headless) that exercise record → analyze → feedback loops and accessibility baseline (keyboard focus, contrast).
+- Add automated UI/state tests (serialization-driven) that exercise record → analyze → feedback loops and accessibility baseline (keyboard focus, contrast).
 - Update user-facing documentation (README, tutorials, changelog) to walk through the interactive session workflow and troubleshooting steps.
 
 ### File Scope

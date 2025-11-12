@@ -1,52 +1,38 @@
-use std::f32::consts::PI;
-use std::path::Path;
-
 use anyhow::Result;
-use flowalyzer::config::AppConfig;
-use flowalyzer::pronunciation::{run_session, AlignmentWeights, CaptureSettings, SessionConfig};
-use hound::{SampleFormat, WavSpec, WavWriter};
-use tempfile::tempdir;
+use flowalyzer::pronunciation::session::engine::{MockCapture, SessionEngine};
+use flowalyzer::pronunciation::{AlignmentWeights, RecordedClip, SessionSnapshot};
+use std::f32::consts::PI;
 
 const SAMPLE_RATE: u32 = 16_000;
-const DURATION_SECONDS: usize = 1;
 
 #[test]
-fn run_session_completes_without_transcripts() -> Result<()> {
-    let temp = tempdir()?;
-    let reference = temp.path().join("reference.wav");
-    write_sine_wave(&reference, 440.0)?;
-
-    let assets = AppConfig::from_override(Some(project_assets_root()))?;
-    let capture = CaptureSettings::new(None, SAMPLE_RATE, 100..=200);
-    let weights = AlignmentWeights::load_from_assets(&assets.assets_root)?;
-    let config = SessionConfig::new(reference, assets.assets_root, capture, weights);
-    let runtime = run_session(config)?;
-    let snapshot = runtime
-        .try_recv()
-        .unwrap_or_else(|| runtime.initial_snapshot());
-
-    assert!(snapshot.scores.overall.is_finite());
-    Ok(())
-}
-
-fn write_sine_wave(path: &Path, frequency: f32) -> Result<()> {
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate: SAMPLE_RATE,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let mut writer = WavWriter::create(path, spec)?;
-    let total_samples = SAMPLE_RATE as usize * DURATION_SECONDS;
-    for index in 0..total_samples {
-        let t = index as f32 / SAMPLE_RATE as f32;
-        let sample = (f32::sin(2.0 * PI * frequency * t) * i16::MAX as f32) as i16;
-        writer.write_sample(sample)?;
+fn session_engine_produces_alignment_with_mock_capture() -> Result<()> {
+    let reference_samples = sine_wave(440.0, 1.0);
+    let learner_samples = sine_wave(445.0, 1.0);
+    let reference_clip = RecordedClip::from_samples(reference_samples.clone(), SAMPLE_RATE);
+    let capture = MockCapture::from_samples(SAMPLE_RATE, learner_samples, 1024);
+    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut snapshot = SessionSnapshot::default();
+    engine.start(&mut snapshot)?;
+    let mut updates = 0;
+    for _ in 0..32 {
+        if let Some(next) = engine.poll(&mut snapshot)? {
+            assert!(next.scores.overall.is_finite());
+            updates += 1;
+            break;
+        }
     }
-    writer.finalize()?;
+    engine.stop(&mut snapshot);
+    assert!(updates > 0, "engine should emit at least one update");
     Ok(())
 }
 
-fn project_assets_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
+fn sine_wave(frequency: f32, duration_secs: f32) -> Vec<f32> {
+    let total_samples = (SAMPLE_RATE as f32 * duration_secs) as usize;
+    (0..total_samples)
+        .map(|index| {
+            let t = index as f32 / SAMPLE_RATE as f32;
+            (2.0 * PI * frequency * t).sin()
+        })
+        .collect()
 }
