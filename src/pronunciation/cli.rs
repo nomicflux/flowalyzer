@@ -55,14 +55,14 @@ pub struct PipelineArgs {
     /// Path to the reference pronunciation WAV file.
     #[arg(long)]
     pub reference: PathBuf,
-    /// Path to the learner-produced WAV file.
-    #[arg(long)]
-    pub learner: PathBuf,
     #[command(flatten)]
     pub capture: CaptureArgs,
     /// Optional override for the assets directory.
     #[arg(long = "assets-path")]
     pub assets_path: Option<PathBuf>,
+    /// Maximum acceptable capture-to-feedback latency in milliseconds.
+    #[arg(long = "latency-budget", default_value_t = 200)]
+    pub latency_budget_ms: u32,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -83,8 +83,6 @@ mod tests {
             "session",
             "--reference",
             "ref.wav",
-            "--learner",
-            "learn.wav",
             "--latency-min",
             "120",
             "--latency-max",
@@ -103,8 +101,6 @@ mod tests {
             "session",
             "--reference",
             "ref.wav",
-            "--learner",
-            "learn.wav",
             "--latency-min",
             "150",
         ])
@@ -115,19 +111,13 @@ mod tests {
 
     #[test]
     fn session_defaults_to_latency_range() {
-        let cli = Cli::try_parse_from([
-            "pronunciation",
-            "session",
-            "--reference",
-            "ref.wav",
-            "--learner",
-            "learn.wav",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["pronunciation", "session", "--reference", "ref.wav"]).unwrap();
         let Command::Session(args) = cli.command;
         let capture = &args.pipeline.capture;
         let range = capture.latency_range().unwrap();
         assert_eq!((*range.start(), *range.end()), (100, 200));
         assert_eq!(capture.sample_rate, 16_000);
+        assert_eq!(args.pipeline.latency_budget_ms, 200);
     }
 }

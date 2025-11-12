@@ -2,6 +2,7 @@ pub mod alignment;
 pub mod cli;
 pub mod features;
 pub mod metrics;
+pub mod session;
 pub mod ui;
 
 use std::error::Error;
@@ -20,6 +21,8 @@ use crate::audio::{decoder, resample};
 use crate::types::AudioData;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+pub use session::{SessionController, SessionHandle, SessionRuntime, SessionSnapshot};
 
 /// Convenient alias for results returned by pronunciation modules.
 pub type Result<T> = std::result::Result<T, PronunciationError>;
@@ -204,27 +207,26 @@ impl CaptureSettings {
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
     pub reference_wav: PathBuf,
-    pub learner_wav: PathBuf,
     pub assets_root: PathBuf,
     pub capture: CaptureSettings,
     pub alignment: AlignmentWeights,
+    pub latency_budget_ms: u32,
     pub ui_enabled: bool,
 }
 
 impl SessionConfig {
     pub fn new(
         reference_wav: PathBuf,
-        learner_wav: PathBuf,
         assets_root: PathBuf,
         capture: CaptureSettings,
         alignment: AlignmentWeights,
     ) -> Self {
         Self {
             reference_wav,
-            learner_wav,
             assets_root,
             capture,
             alignment,
+            latency_budget_ms: 200,
             ui_enabled: false,
         }
     }
@@ -233,35 +235,21 @@ impl SessionConfig {
         self.ui_enabled = enabled;
         self
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct SessionOutcome {
-    pub alignment: AlignmentReport,
-    pub scores: PronunciationScores,
+    pub fn with_latency_budget(mut self, budget_ms: u32) -> Self {
+        self.latency_budget_ms = budget_ms.max(1);
+        self
+    }
 }
 
 /// Primary orchestration entry point for the pronunciation pipeline.
-pub fn run_session(config: SessionConfig) -> Result<SessionOutcome> {
+pub fn run_session(config: SessionConfig) -> Result<SessionRuntime> {
     validate_config(&config)?;
-    let reference_clip = load_clip(&config.reference_wav)?;
-    let learner_clip = load_clip(&config.learner_wav)?;
-    let extractor = features::FeatureExtractor::new();
-    let reference_features = extractor.extract(&reference_clip)?;
-    let learner_features = extractor.extract(&learner_clip)?;
-    let alignment = alignment::AudioAligner::new(config.alignment.clone())
-        .align(&reference_features, &learner_features)?;
-    let scores = metrics::MetricCalculator::new().score(&alignment)?;
-    let outcome = SessionOutcome { alignment, scores };
-    if config.ui_enabled {
-        let state = ui::prepare_visualization(&outcome.alignment, &outcome.scores)?;
-        crate::ui::launch_ui(&config, &state.alignment, &state.scores)?;
-    }
-    Ok(outcome)
+    session::SessionRuntime::new(config)
 }
 
 impl RecordedClip {
-    fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
+    pub fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
         let duration_secs = samples.len() as f64 / sample_rate as f64;
         Self {
             samples: Arc::from(samples.into_boxed_slice()),
@@ -275,9 +263,6 @@ impl RecordedClip {
 fn validate_config(config: &SessionConfig) -> Result<()> {
     if config.reference_wav.as_os_str().is_empty() {
         return Err(PronunciationError::new("reference WAV path missing"));
-    }
-    if config.learner_wav.as_os_str().is_empty() {
-        return Err(PronunciationError::new("learner WAV path missing"));
     }
     if !config.assets_root.is_dir() {
         return Err(PronunciationError::new(
@@ -299,10 +284,13 @@ fn validate_config(config: &SessionConfig) -> Result<()> {
             "latency range must have max >= min",
         ));
     }
+    if config.latency_budget_ms == 0 {
+        return Err(PronunciationError::new("latency budget must be positive"));
+    }
     Ok(())
 }
 
-fn load_clip(path: &Path) -> Result<RecordedClip> {
+pub(super) fn load_clip(path: &Path) -> Result<RecordedClip> {
     if !path.exists() {
         return Err(PronunciationError::new(format!(
             "audio file {:?} does not exist",
@@ -314,7 +302,7 @@ fn load_clip(path: &Path) -> Result<RecordedClip> {
     clip_from_audio(audio)
 }
 
-fn clip_from_audio(audio: AudioData) -> Result<RecordedClip> {
+pub(super) fn clip_from_audio(audio: AudioData) -> Result<RecordedClip> {
     let samples = resample::linear_resample(&audio.samples, audio.sample_rate, TARGET_SAMPLE_RATE)
         .map_err(|err| PronunciationError::new(err.to_string()))?;
     Ok(RecordedClip::from_samples(samples, TARGET_SAMPLE_RATE))

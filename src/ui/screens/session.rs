@@ -1,18 +1,18 @@
 use eframe::egui;
 
-use crate::pronunciation::{AlignedPhoneme, AlignmentReport, PronunciationScores};
-use crate::ui::components::control_panel::ControlPanel;
+use crate::pronunciation::{
+    AlignedPhoneme, AlignmentReport, SessionController, SessionHandle, SessionSnapshot,
+};
 use crate::ui::components::phoneme_timeline::PhonemeTimeline;
 use crate::ui::components::pitch::PitchView;
 use crate::ui::components::spectrogram::{SpectrogramData, SpectrogramView};
 use crate::ui::components::waveform::WaveformView;
 
 pub struct SessionApp {
-    alignment: AlignmentReport,
-    scores: PronunciationScores,
+    handle: SessionHandle,
+    controller: SessionController,
+    snapshot: SessionSnapshot,
     selected_phoneme: Option<usize>,
-    is_recording: bool,
-    is_playing: bool,
     reference_waveform: Vec<f32>,
     learner_waveform: Vec<f32>,
     spectrogram: Option<SpectrogramData>,
@@ -21,35 +21,91 @@ pub struct SessionApp {
 }
 
 impl SessionApp {
-    pub fn new(alignment: AlignmentReport, scores: PronunciationScores) -> Self {
-        let selected = if alignment.phonemes.is_empty() {
-            None
-        } else {
-            Some(0)
+    pub fn new(handle: SessionHandle) -> Self {
+        let controller = handle.controller();
+        let snapshot = handle.initial_snapshot();
+        let mut app = Self {
+            handle,
+            controller,
+            snapshot,
+            selected_phoneme: None,
+            reference_waveform: Vec::new(),
+            learner_waveform: Vec::new(),
+            spectrogram: None,
+            reference_pitch: Vec::new(),
+            learner_pitch: Vec::new(),
         };
-        Self {
-            reference_waveform: to_waveform(&alignment.reference_energy),
-            learner_waveform: to_waveform(&alignment.learner_energy),
-            spectrogram: build_spectrogram(&alignment),
-            reference_pitch: alignment.reference_pitch.clone(),
-            learner_pitch: alignment.learner_pitch.clone(),
-            alignment,
-            scores,
-            selected_phoneme: selected,
-            is_recording: false,
-            is_playing: false,
+        app.sync_visuals();
+        app
+    }
+
+    fn sync_visuals(&mut self) {
+        self.refresh_selection();
+        self.reference_waveform = to_waveform(&self.snapshot.alignment.reference_energy);
+        self.learner_waveform = to_waveform(&self.snapshot.alignment.learner_energy);
+        self.spectrogram = build_spectrogram(&self.snapshot.alignment);
+        self.reference_pitch = self.snapshot.alignment.reference_pitch.clone();
+        self.learner_pitch = self.snapshot.alignment.learner_pitch.clone();
+    }
+
+    fn refresh_selection(&mut self) {
+        let count = self.snapshot.alignment.phonemes.len();
+        self.selected_phoneme = match (count, self.selected_phoneme) {
+            (0, _) => None,
+            (_, Some(index)) if index < count => Some(index),
+            _ => Some(0),
+        };
+    }
+
+    fn poll_updates(&mut self) {
+        while let Some(update) = self.handle.try_recv() {
+            self.snapshot = update;
+            self.sync_visuals();
         }
     }
 
     fn show_top_panel(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::top("controls").show(ctx, |ui| {
-            ControlPanel {
-                is_recording: &mut self.is_recording,
-                is_playing: &mut self.is_playing,
-                scores: &self.scores,
-            }
-            .show(ui);
+            ui.horizontal(|ui| {
+                self.control_buttons(ui);
+                ui.separator();
+                self.show_scores(ui);
+            });
+            ui.label(format!("Latency: {:.1} ms", self.snapshot.latency_ms));
+            self.error_banner(ui);
         });
+    }
+
+    fn control_buttons(&mut self, ui: &mut egui::Ui) {
+        let label = if self.snapshot.recording {
+            "Stop Recording"
+        } else {
+            "Start Recording"
+        };
+        if ui.button(label).clicked() {
+            let action = if self.snapshot.recording {
+                self.controller.stop()
+            } else {
+                self.controller.start()
+            };
+            if let Err(err) = action {
+                ui.colored_label(egui::Color32::from_rgb(200, 60, 60), err.to_string());
+            }
+        }
+    }
+
+    fn show_scores(&self, ui: &mut egui::Ui) {
+        let scores = &self.snapshot.scores;
+        ui.label(format!("Overall: {:.2}", scores.overall));
+        ui.label(format!("Timing: {:.2}", scores.timing));
+        ui.label(format!("Articulation: {:.2}", scores.articulation));
+        ui.label(format!("Intonation: {:.2}", scores.intonation));
+    }
+
+    fn error_banner(&self, ui: &mut egui::Ui) {
+        if let Some(message) = &self.snapshot.error {
+            ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
+        }
     }
 
     fn show_timeline(&mut self, ctx: &egui::Context) {
@@ -57,7 +113,7 @@ impl SessionApp {
             .resizable(false)
             .show(ctx, |ui| {
                 PhonemeTimeline {
-                    alignment: &self.alignment,
+                    alignment: &self.snapshot.alignment,
                     selected: &mut self.selected_phoneme,
                 }
                 .show(ui);
@@ -108,12 +164,13 @@ impl SessionApp {
 
     fn selected_phoneme(&self) -> Option<&AlignedPhoneme> {
         self.selected_phoneme
-            .and_then(|index| self.alignment.phonemes.get(index))
+            .and_then(|index| self.snapshot.alignment.phonemes.get(index))
     }
 }
 
 impl eframe::App for SessionApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_updates();
         self.show_top_panel(ctx);
         self.show_timeline(ctx);
         self.show_main(ctx);

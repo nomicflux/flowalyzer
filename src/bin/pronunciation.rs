@@ -13,7 +13,8 @@ fn main() -> Result<()> {
 
 fn handle_session(args: &SessionArgs) -> Result<()> {
     let config = build_session_config(&args.pipeline, true)?;
-    run_session(config)?;
+    let runtime = run_session(config)?;
+    runtime.launch()?;
     Ok(())
 }
 
@@ -27,10 +28,10 @@ fn build_session_config(args: &PipelineArgs, ui_enabled: bool) -> Result<Session
     );
     Ok(SessionConfig::new(
         args.reference.clone(),
-        args.learner.clone(),
         assets.assets_root,
         capture,
         alignment,
     )
+    .with_latency_budget(args.latency_budget_ms)
     .with_ui(ui_enabled))
 }

@@ -43,6 +43,13 @@ struct StreamSetup {
     sample_rate: u32,
 }
 
+pub struct LiveCapture {
+    stream: Stream,
+    receiver: Receiver<Vec<f32>>,
+    finished: Arc<AtomicBool>,
+    sample_rate: u32,
+}
+
 pub fn record_audio(config: &CaptureConfig) -> Result<AudioData> {
     let device = select_device(config)?;
     let setup = build_stream(&device, config)?;
@@ -157,6 +164,51 @@ fn build_input_stream(
     }
     .map_err(|err| anyhow!(err))
     .context("failed to build input stream")
+}
+
+impl LiveCapture {
+    pub fn start(config: &CaptureConfig) -> Result<Self> {
+        let setup = start_streaming_capture(config)?;
+        Ok(Self {
+            stream: setup.stream,
+            receiver: setup.receiver,
+            finished: setup.finished,
+            sample_rate: setup.sample_rate,
+        })
+    }
+
+    pub fn recv_chunk(&self, timeout: Duration) -> Option<Vec<f32>> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(chunk) => Some(chunk),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => None,
+        }
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn stop(&self) {
+        self.finished.store(true, Ordering::SeqCst);
+        let _ = self.stream.pause();
+    }
+}
+
+impl Drop for LiveCapture {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn start_streaming_capture(config: &CaptureConfig) -> Result<StreamSetup> {
+    let device = select_device(config)?;
+    let setup = build_stream(&device, config)?;
+    setup
+        .stream
+        .play()
+        .context("failed to start live capture stream")?;
+    Ok(setup)
 }
 
 fn emit_chunk_f32(
