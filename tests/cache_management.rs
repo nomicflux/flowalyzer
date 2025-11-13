@@ -24,9 +24,15 @@ fn create_test_clip(frequency: f32, duration_secs: f32) -> RecordedClip {
 fn test_cache_populated_at_creation() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
-    let alignment = engine.reference_alignment(ClipVariant::Original);
+    let alignment = engine.reference_alignment(ClipVariant::Original)?;
     assert!(
         !alignment.reference_energy.is_empty(),
         "alignment should have energy data"
@@ -42,9 +48,15 @@ fn test_cache_populated_at_creation() -> Result<()> {
 fn test_get_reference_features_original() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
-    let alignment = engine.reference_alignment(ClipVariant::Original);
+    let alignment = engine.reference_alignment(ClipVariant::Original)?;
     assert!(
         !alignment.reference_energy.is_empty(),
         "should retrieve cached features"
@@ -56,13 +68,16 @@ fn test_get_reference_features_original() -> Result<()> {
 fn test_get_reference_features_cache_miss() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
-    let alignment = engine.reference_alignment(ClipVariant::Flowalyzed);
-    assert!(
-        alignment.reference_energy.is_empty(),
-        "cache miss should return default empty alignment"
-    );
+    let alignment_result = engine.reference_alignment(ClipVariant::Flowalyzed);
+    assert!(alignment_result.is_err(), "cache miss should return error");
     Ok(())
 }
 
@@ -70,18 +85,24 @@ fn test_get_reference_features_cache_miss() -> Result<()> {
 fn test_invalidate_flowalyzed_cache() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
     engine.cache_flowalyzed_features(&flowalyzed_clip)?;
 
-    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed);
+    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
         !flowalyzed_alignment.reference_energy.is_empty(),
         "flowalyzed cache should be populated"
     );
 
-    let original_alignment = engine.reference_alignment(ClipVariant::Original);
+    let original_alignment = engine.reference_alignment(ClipVariant::Original)?;
     assert!(
         !original_alignment.reference_energy.is_empty(),
         "original cache should still exist"
@@ -89,13 +110,13 @@ fn test_invalidate_flowalyzed_cache() -> Result<()> {
 
     engine.invalidate_flowalyzed_cache();
 
-    let flowalyzed_after = engine.reference_alignment(ClipVariant::Flowalyzed);
+    let flowalyzed_after_result = engine.reference_alignment(ClipVariant::Flowalyzed);
     assert!(
-        flowalyzed_after.reference_energy.is_empty(),
-        "flowalyzed cache should be empty after invalidation"
+        flowalyzed_after_result.is_err(),
+        "flowalyzed cache should return error after invalidation"
     );
 
-    let original_after = engine.reference_alignment(ClipVariant::Original);
+    let original_after = engine.reference_alignment(ClipVariant::Original)?;
     assert!(
         !original_after.reference_energy.is_empty(),
         "original cache should be retained after invalidation"
@@ -107,12 +128,18 @@ fn test_invalidate_flowalyzed_cache() -> Result<()> {
 fn test_cache_flowalyzed_features() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
     engine.cache_flowalyzed_features(&flowalyzed_clip)?;
 
-    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed);
+    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
         !flowalyzed_alignment.reference_energy.is_empty(),
         "flowalyzed features should be cached"
@@ -128,10 +155,16 @@ fn test_cache_flowalyzed_features() -> Result<()> {
 fn test_reference_alignment_cached() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
-    let alignment1 = engine.reference_alignment(ClipVariant::Original);
-    let alignment2 = engine.reference_alignment(ClipVariant::Original);
+    let alignment1 = engine.reference_alignment(ClipVariant::Original)?;
+    let alignment2 = engine.reference_alignment(ClipVariant::Original)?;
 
     assert_eq!(
         alignment1.reference_energy.len(),
@@ -150,15 +183,21 @@ fn test_reference_alignment_cached() -> Result<()> {
 fn test_set_active_clip() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
-    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
     engine.cache_flowalyzed_features(&flowalyzed_clip)?;
 
     engine.set_active_clip(ClipVariant::Flowalyzed);
 
-    let original_alignment = engine.reference_alignment(ClipVariant::Original);
-    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed);
+    let original_alignment = engine.reference_alignment(ClipVariant::Original)?;
+    let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
 
     assert!(
         !original_alignment.reference_energy.is_empty(),
@@ -176,7 +215,13 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let learner_samples = sine_wave(445.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, learner_samples, 1024);
-    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
     engine.cache_flowalyzed_features(&flowalyzed_clip)?;

@@ -18,8 +18,9 @@ use ndarray::{Array1, Array2};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::audio::{decoder, resample};
-use crate::types::AudioData;
+use crate::audio::{assembler, decoder, resample};
+use crate::operations::recipe;
+use crate::types::{AudioChunk, AudioData, Recipe};
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MAX_CLIP_DURATION_SECS: u64 = 300; // 5 minutes
@@ -338,4 +339,63 @@ fn validate_clip_duration(clip: &RecordedClip) -> Result<()> {
     } else {
         Ok(())
     }
+}
+
+fn validate_time_range(clip: &RecordedClip, start_time: f64, end_time: f64) -> Result<()> {
+    if start_time < 0.0 {
+        return Err(PronunciationError::new("start_time must be non-negative"));
+    }
+    if end_time <= start_time {
+        return Err(PronunciationError::new(
+            "end_time must be greater than start_time",
+        ));
+    }
+    let clip_duration = clip.duration.as_secs_f64();
+    if end_time > clip_duration {
+        return Err(PronunciationError::new(format!(
+            "end_time exceeds clip duration ({} seconds)",
+            clip_duration
+        )));
+    }
+    Ok(())
+}
+
+pub fn extract_audio_range(
+    clip: &RecordedClip,
+    start_time: f64,
+    end_time: f64,
+) -> Result<AudioChunk> {
+    validate_time_range(clip, start_time, end_time)?;
+    let start_sample = (start_time * clip.sample_rate as f64) as usize;
+    let end_sample = (end_time * clip.sample_rate as f64) as usize;
+    let start_sample = start_sample.min(clip.samples.len());
+    let end_sample = end_sample.min(clip.samples.len());
+    let samples = clip.samples[start_sample..end_sample].to_vec();
+    Ok(AudioChunk {
+        samples,
+        sample_rate: clip.sample_rate,
+        start_time,
+        end_time,
+    })
+}
+
+pub fn apply_recipe_to_range(
+    clip: &RecordedClip,
+    start_time: f64,
+    end_time: f64,
+    recipe: &Recipe,
+) -> Result<RecordedClip> {
+    let chunk = extract_audio_range(clip, start_time, end_time)?;
+    let chunks = recipe::apply_recipe(&chunk, recipe);
+    if chunks.is_empty() {
+        return Err(PronunciationError::new("recipe produced no output chunks"));
+    }
+    let audio_data = assembler::assemble_audio(&chunks).ok_or_else(|| {
+        PronunciationError::new(
+            "failed to assemble audio chunks (sample rate mismatch or empty chunks)",
+        )
+    })?;
+    let result = clip_from_audio(audio_data)?;
+    validate_clip_duration(&result)?;
+    Ok(result)
 }

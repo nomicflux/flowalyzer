@@ -11,7 +11,13 @@ fn session_engine_produces_alignment_with_mock_capture() -> Result<()> {
     let learner_samples = sine_wave(445.0, 1.0);
     let reference_clip = RecordedClip::from_samples(reference_samples.clone(), SAMPLE_RATE);
     let capture = MockCapture::from_samples(SAMPLE_RATE, learner_samples, 1024);
-    let mut engine = SessionEngine::new(reference_clip, AlignmentWeights::default(), 200, capture)?;
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        true,
+    )?;
     let mut snapshot = SessionSnapshot::default();
     engine.start(&mut snapshot)?;
     let mut updates = 0;

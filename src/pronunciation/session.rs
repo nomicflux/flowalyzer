@@ -339,10 +339,12 @@ pub mod engine {
         reference_alignment_cache: HashMap<ClipVariant, AlignmentReport>,
         active_clip: ClipVariant,
         learner_buffer: Vec<f32>,
+        reference: RecordedClip,
         reference_samples: usize,
         latency_budget_ms: u32,
         capture_sample_rate: Option<u32>,
         chunk_count: usize,
+        defer_feature_extraction: bool,
     }
 
     impl<C: CaptureSource> SessionEngine<C> {
@@ -351,36 +353,41 @@ pub mod engine {
             alignment: AlignmentWeights,
             latency_budget_ms: u32,
             capture: C,
+            defer_feature_extraction: bool,
         ) -> Result<Self> {
             let extractor = FeatureExtractor::new();
-            info!(
-                samples = reference.samples.len(),
-                duration_secs = reference.duration.as_secs_f64(),
-                "starting feature extraction for reference audio"
-            );
-            let start = Instant::now();
-            let reference_features = extractor.extract(&reference).map_err(|err| {
-                let elapsed = start.elapsed();
-                error!(
-                    elapsed_secs = elapsed.as_secs_f64(),
-                    error = %err,
-                    "feature extraction failed"
-                );
-                err
-            })?;
-            let elapsed = start.elapsed();
-            info!(
-                elapsed_secs = elapsed.as_secs_f64(),
-                energy_frames = reference_features.energy.len(),
-                pitch_frames = reference_features.pitch_contour.len(),
-                "feature extraction completed"
-            );
             let mut reference_features_cache = HashMap::new();
-            reference_features_cache.insert(ClipVariant::Original, reference_features.clone());
-            let reference_alignment =
-                Self::create_reference_alignment(&reference_features, reference.samples.len());
             let mut reference_alignment_cache = HashMap::new();
-            reference_alignment_cache.insert(ClipVariant::Original, reference_alignment);
+
+            if !defer_feature_extraction {
+                info!(
+                    samples = reference.samples.len(),
+                    duration_secs = reference.duration.as_secs_f64(),
+                    "starting feature extraction for reference audio"
+                );
+                let start = Instant::now();
+                let reference_features = extractor.extract(&reference).map_err(|err| {
+                    let elapsed = start.elapsed();
+                    error!(
+                        elapsed_secs = elapsed.as_secs_f64(),
+                        error = %err,
+                        "feature extraction failed"
+                    );
+                    err
+                })?;
+                let elapsed = start.elapsed();
+                info!(
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    energy_frames = reference_features.energy.len(),
+                    pitch_frames = reference_features.pitch_contour.len(),
+                    "feature extraction completed"
+                );
+                reference_features_cache.insert(ClipVariant::Original, reference_features.clone());
+                let reference_alignment =
+                    Self::create_reference_alignment(&reference_features, reference.samples.len());
+                reference_alignment_cache.insert(ClipVariant::Original, reference_alignment);
+            }
+            let reference_samples = reference.samples.len();
             Ok(Self {
                 capture,
                 extractor,
@@ -390,10 +397,12 @@ pub mod engine {
                 reference_alignment_cache,
                 active_clip: ClipVariant::Original,
                 learner_buffer: Vec::new(),
-                reference_samples: reference.samples.len(),
+                reference,
+                reference_samples,
                 latency_budget_ms,
                 capture_sample_rate: None,
                 chunk_count: 0,
+                defer_feature_extraction,
             })
         }
 
@@ -455,13 +464,15 @@ pub mod engine {
             self.latency_budget_ms
         }
 
-        pub fn reference_alignment(&self, variant: ClipVariant) -> AlignmentReport {
-            self.get_reference_alignment(variant)
-                .cloned()
-                .unwrap_or_else(|_| {
+        pub fn reference_alignment(&mut self, variant: ClipVariant) -> Result<AlignmentReport> {
+            self.ensure_features(variant)?;
+            match self.get_reference_alignment(variant) {
+                Ok(alignment) => Ok(alignment.clone()),
+                Err(_) => {
                     warn!("cache miss for reference alignment, returning default");
-                    AlignmentReport::default()
-                })
+                    Ok(AlignmentReport::default())
+                }
+            }
         }
 
         fn get_reference_features(&self, variant: ClipVariant) -> Result<&PronunciationFeatures> {
@@ -474,6 +485,73 @@ pub mod engine {
             self.reference_alignment_cache.get(&variant).ok_or_else(|| {
                 PronunciationError::new(format!("cache miss for variant: {:?}", variant))
             })
+        }
+
+        fn ensure_features(&mut self, variant: ClipVariant) -> Result<()> {
+            if self.reference_features_cache.contains_key(&variant) {
+                return Ok(());
+            }
+            self.validate_defer_mode(variant)?;
+            let reference_clip = self.get_clip_for_variant(variant)?;
+            let reference_features = self.extract_features_lazy(reference_clip, variant)?;
+            self.cache_features_and_alignment(variant, reference_features, reference_clip.samples.len());
+            Ok(())
+        }
+
+        fn validate_defer_mode(&self, variant: ClipVariant) -> Result<()> {
+            if !self.defer_feature_extraction {
+                return Err(PronunciationError::new(format!(
+                    "cache miss for variant: {:?} (feature extraction was not deferred)",
+                    variant
+                )));
+            }
+            Ok(())
+        }
+
+        fn get_clip_for_variant(&self, variant: ClipVariant) -> Result<&RecordedClip> {
+            match variant {
+                ClipVariant::Original => Ok(&self.reference),
+                ClipVariant::Flowalyzed => {
+                    Err(PronunciationError::new(
+                        "Flowalyzed variant requires explicit caching via cache_flowalyzed_features"
+                    ))
+                }
+            }
+        }
+
+        fn extract_features_lazy(&self, clip: &RecordedClip, variant: ClipVariant) -> Result<PronunciationFeatures> {
+            info!(
+                variant = ?variant,
+                samples = clip.samples.len(),
+                duration_secs = clip.duration.as_secs_f64(),
+                "lazy extracting features for reference audio"
+            );
+            let start = Instant::now();
+            let features = self.extractor.extract(clip).map_err(|err| {
+                let elapsed = start.elapsed();
+                error!(
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    error = %err,
+                    variant = ?variant,
+                    "lazy feature extraction failed"
+                );
+                err
+            })?;
+            let elapsed = start.elapsed();
+            info!(
+                elapsed_secs = elapsed.as_secs_f64(),
+                energy_frames = features.energy.len(),
+                pitch_frames = features.pitch_contour.len(),
+                variant = ?variant,
+                "lazy feature extraction completed"
+            );
+            Ok(features)
+        }
+
+        fn cache_features_and_alignment(&mut self, variant: ClipVariant, features: PronunciationFeatures, sample_count: usize) {
+            self.reference_features_cache.insert(variant, features.clone());
+            let alignment = Self::create_reference_alignment(&features, sample_count);
+            self.reference_alignment_cache.insert(variant, alignment);
         }
 
         fn create_reference_alignment(
@@ -523,6 +601,7 @@ pub mod engine {
                 return Ok(None);
             }
             let start = Instant::now();
+            self.ensure_features(self.active_clip)?;
             let clip = RecordedClip::from_samples(self.learner_buffer.clone(), TARGET_SAMPLE_RATE);
             let features = self.extractor.extract(&clip)?;
             let ref_features = self.get_reference_features(self.active_clip)?;
@@ -684,11 +763,12 @@ impl EngineRunner {
         let capture = engine::LiveCaptureSource::new(&config.capture);
         info!("creating session engine (this will extract features from reference)");
         let build_start = Instant::now();
-        let engine = engine::SessionEngine::new(
+        let mut engine = engine::SessionEngine::new(
             original_reference.clone(),
             config.alignment,
             config.latency_budget_ms,
             capture,
+            false, // Don't defer in production
         )
         .map_err(|err| {
             let elapsed = build_start.elapsed();
@@ -706,7 +786,7 @@ impl EngineRunner {
         );
         info!("computing initial reference alignment");
         let alignment_start = Instant::now();
-        let initial_alignment = engine.reference_alignment(ClipVariant::Original);
+        let initial_alignment = engine.reference_alignment(ClipVariant::Original)?;
         let alignment_elapsed = alignment_start.elapsed();
         info!(
             elapsed_secs = alignment_elapsed.as_secs_f64(),

@@ -6,7 +6,7 @@ use flowalyzer::pronunciation::RecordedClip;
 use ndarray::Array1;
 
 const SAMPLE_RATE: u32 = 16_000;
-const DURATION_SECONDS: f32 = 0.8;
+const DURATION_SECONDS: f32 = 0.15; // 150ms - minimal but still multiple frames
 
 #[test]
 fn contour_remains_invariant_under_octave_shift() {

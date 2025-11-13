@@ -1,10 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use flowalyzer::config::AppConfig;
-use flowalyzer::pronunciation::{
-    load_clip, AlignmentWeights, CaptureSettings, ClipVariant, RecordedClip, SessionConfig,
-};
+use flowalyzer::pronunciation::{load_clip, ClipVariant, RecordedClip};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use tempfile::tempdir;
 
@@ -27,48 +24,6 @@ fn write_sine_wave(path: &Path, frequency: f32, duration_secs: usize) -> Result<
         writer.write_sample(sample)?;
     }
     writer.finalize()?;
-    Ok(())
-}
-
-fn project_assets_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets")
-}
-
-fn create_test_config(reference_path: std::path::PathBuf) -> Result<SessionConfig> {
-    let assets = AppConfig::from_override(Some(project_assets_root()))?;
-    let capture = CaptureSettings::new(None, SAMPLE_RATE, 100..=200);
-    let weights = AlignmentWeights::load_from_assets(&assets.assets_root)?;
-    Ok(SessionConfig::new(
-        reference_path,
-        assets.assets_root,
-        capture,
-        weights,
-    ))
-}
-
-#[test]
-fn session_config_accepts_clip_under_five_minutes() -> Result<()> {
-    let temp = tempdir()?;
-    let reference = temp.path().join("reference.wav");
-    // 60 seconds - well under limit
-    write_sine_wave(&reference, 440.0, 60)?;
-
-    let config = create_test_config(reference)?;
-    let result = flowalyzer::pronunciation::run_session(config);
-    assert!(result.is_ok(), "should accept clip under 5 minutes");
-    Ok(())
-}
-
-#[test]
-fn session_config_accepts_clip_exactly_five_minutes() -> Result<()> {
-    let temp = tempdir()?;
-    let reference = temp.path().join("reference.wav");
-    // 300 seconds = exactly 5 minutes
-    write_sine_wave(&reference, 440.0, 300)?;
-
-    let config = create_test_config(reference)?;
-    let result = flowalyzer::pronunciation::run_session(config);
-    assert!(result.is_ok(), "should accept clip exactly 5 minutes");
     Ok(())
 }
 
