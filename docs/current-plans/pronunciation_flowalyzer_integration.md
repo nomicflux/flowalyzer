@@ -248,7 +248,7 @@
 | 2.1 | Complete |
 | 2.2 | Complete |
 | 2.3 | Complete |
-| 3.1 | Pending |
+| 3.1 | Complete |
 | 3.2 | Pending |
 | 3.3 | Pending |
 | 4.1 | Pending |
@@ -333,6 +333,18 @@
 - Extend waveform component to render draggable start/end handles with visual feedback.
 - Enforce maximum 5-minute span and display validation errors.
 - Files: `src/ui/components/waveform.rs`, `src/ui/screens/session.rs`, possible new helper module & UI tests.
+- **Status: COMPLETE** *(2025-01-27)* - Implemented:
+  - Created `src/ui/components/range_selection.rs` with `RangeSelection`, `SelectionOutput`, `SelectionError` types
+  - Added validation function `validate_selection()` enforcing 5-minute maximum and start < end
+  - Added conversion functions `fraction_to_time()` and `time_to_fraction()` for UI coordinate mapping
+  - Updated `WaveformView` struct to support selection with `selection`, `total_duration`, and `enable_selection` fields
+  - Modified `WaveformView::show()` to handle drag interactions, render selection overlay and draggable handles
+  - Added visual feedback: semi-transparent blue selection rectangle, circular handles that expand on hover
+  - Updated `SessionApp` to store `range_selection` and `selection_error` state
+  - Modified `show_waveforms()` to enable selection on reference waveform (disabled during recording)
+  - Added `show_selection_info()` method to display selection state and validation errors in top panel
+  - Created comprehensive unit tests in `range_selection.rs` module covering validation, conversion, and edge cases
+  - All tests pass, clippy clean, code formatted
 
 ### Phase 3.2 – Recipe Builder UI
 - Build recipe editor panel (steps list, repeat/speed/silence controls, presets, validation messages).

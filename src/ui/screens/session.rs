@@ -9,6 +9,7 @@ use crate::pronunciation::{
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
 use crate::ui::components::phoneme_timeline::PhonemeTimeline;
 use crate::ui::components::pitch::PitchView;
+use crate::ui::components::range_selection::{RangeSelection, SelectionError};
 use crate::ui::components::spectrogram::{SpectrogramData, SpectrogramView};
 use crate::ui::components::waveform::WaveformView;
 
@@ -28,6 +29,8 @@ pub struct SessionApp {
     spectrogram: Option<SpectrogramData>,
     reference_pitch: Vec<f32>,
     learner_pitch: Vec<f32>,
+    range_selection: Option<RangeSelection>,
+    selection_error: Option<SelectionError>,
 }
 
 impl SessionApp {
@@ -47,6 +50,8 @@ impl SessionApp {
             spectrogram: None,
             reference_pitch: Vec::new(),
             learner_pitch: Vec::new(),
+            range_selection: None,
+            selection_error: None,
         };
         app.sync_visuals();
         app
@@ -117,7 +122,25 @@ impl SessionApp {
             if let Some(message) = &self.control_error {
                 ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
             }
+            self.show_selection_info(ui);
         });
+    }
+
+    fn show_selection_info(&self, ui: &mut egui::Ui) {
+        if let Some(sel) = self.range_selection {
+            let span = sel.end_sec - sel.start_sec;
+            ui.label(format!(
+                "Selection: {:.2}s - {:.2}s (span: {:.2}s)",
+                sel.start_sec, sel.end_sec, span
+            ));
+        }
+        if let Some(err) = self.selection_error {
+            let message = match err {
+                SelectionError::ExceedsMaxDuration => "Selection span exceeds 5-minute maximum",
+                SelectionError::InvalidRange => "Invalid selection range",
+            };
+            ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
+        }
     }
 
     fn handle_shortcuts(&self, ctx: &egui::Context) -> ControlActions {
@@ -238,17 +261,30 @@ impl SessionApp {
         });
     }
 
-    fn show_waveforms(&self, ui: &mut egui::Ui) {
+    fn show_waveforms(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("waveforms").show(ui, |ui| {
-            WaveformView {
+            let total_duration = self.snapshot.alignment.total_duration.as_secs_f64();
+            let mut waveform_view = WaveformView {
                 id: "reference_waveform",
                 samples: &self.reference_waveform,
+                selection: self.range_selection.as_mut(),
+                total_duration,
+                enable_selection: !self.snapshot.recording,
+            };
+            let output = waveform_view.show(ui);
+
+            if output.changed {
+                self.range_selection = output.selection;
+                self.selection_error = output.validation_error;
             }
-            .show(ui);
+
             ui.end_row();
             WaveformView {
                 id: "learner_waveform",
                 samples: &self.learner_waveform,
+                selection: None,
+                total_duration,
+                enable_selection: false,
             }
             .show(ui);
             ui.end_row();

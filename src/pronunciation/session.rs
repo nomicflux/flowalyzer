@@ -494,7 +494,11 @@ pub mod engine {
             self.validate_defer_mode(variant)?;
             let reference_clip = self.get_clip_for_variant(variant)?;
             let reference_features = self.extract_features_lazy(reference_clip, variant)?;
-            self.cache_features_and_alignment(variant, reference_features, reference_clip.samples.len());
+            self.cache_features_and_alignment(
+                variant,
+                reference_features,
+                reference_clip.samples.len(),
+            );
             Ok(())
         }
 
@@ -511,15 +515,17 @@ pub mod engine {
         fn get_clip_for_variant(&self, variant: ClipVariant) -> Result<&RecordedClip> {
             match variant {
                 ClipVariant::Original => Ok(&self.reference),
-                ClipVariant::Flowalyzed => {
-                    Err(PronunciationError::new(
-                        "Flowalyzed variant requires explicit caching via cache_flowalyzed_features"
-                    ))
-                }
+                ClipVariant::Flowalyzed => Err(PronunciationError::new(
+                    "Flowalyzed variant requires explicit caching via cache_flowalyzed_features",
+                )),
             }
         }
 
-        fn extract_features_lazy(&self, clip: &RecordedClip, variant: ClipVariant) -> Result<PronunciationFeatures> {
+        fn extract_features_lazy(
+            &self,
+            clip: &RecordedClip,
+            variant: ClipVariant,
+        ) -> Result<PronunciationFeatures> {
             info!(
                 variant = ?variant,
                 samples = clip.samples.len(),
@@ -548,8 +554,14 @@ pub mod engine {
             Ok(features)
         }
 
-        fn cache_features_and_alignment(&mut self, variant: ClipVariant, features: PronunciationFeatures, sample_count: usize) {
-            self.reference_features_cache.insert(variant, features.clone());
+        fn cache_features_and_alignment(
+            &mut self,
+            variant: ClipVariant,
+            features: PronunciationFeatures,
+            sample_count: usize,
+        ) {
+            self.reference_features_cache
+                .insert(variant, features.clone());
             let alignment = Self::create_reference_alignment(&features, sample_count);
             self.reference_alignment_cache.insert(variant, alignment);
         }
