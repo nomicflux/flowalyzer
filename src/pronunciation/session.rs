@@ -313,14 +313,14 @@ type CaptureSettings = super::CaptureSettings;
 pub mod engine {
     use super::{
         append_limited, min_required_samples, AlignmentReport, AudioAligner, CaptureSettings,
-        FeatureExtractor, MetricCalculator, PronunciationError, PronunciationFeatures,
+        ClipVariant, FeatureExtractor, MetricCalculator, PronunciationError, PronunciationFeatures,
         PronunciationScores, RecordedClip, Result, SessionSnapshot, CAPTURE_POLL_MS,
         TARGET_SAMPLE_RATE,
     };
     use crate::audio::capture::{CaptureConfig, LiveCapture};
     use crate::audio::resample;
     use crate::pronunciation::AlignmentWeights;
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::time::{Duration, Instant};
     use tracing::{debug, error, info, warn};
 
@@ -335,7 +335,9 @@ pub mod engine {
         extractor: FeatureExtractor,
         aligner: AudioAligner,
         metrics: MetricCalculator,
-        reference_features: PronunciationFeatures,
+        reference_features_cache: HashMap<ClipVariant, PronunciationFeatures>,
+        reference_alignment_cache: HashMap<ClipVariant, AlignmentReport>,
+        active_clip: ClipVariant,
         learner_buffer: Vec<f32>,
         reference_samples: usize,
         latency_budget_ms: u32,
@@ -373,12 +375,20 @@ pub mod engine {
                 pitch_frames = reference_features.pitch_contour.len(),
                 "feature extraction completed"
             );
+            let mut reference_features_cache = HashMap::new();
+            reference_features_cache.insert(ClipVariant::Original, reference_features.clone());
+            let reference_alignment =
+                Self::create_reference_alignment(&reference_features, reference.samples.len());
+            let mut reference_alignment_cache = HashMap::new();
+            reference_alignment_cache.insert(ClipVariant::Original, reference_alignment);
             Ok(Self {
                 capture,
                 extractor,
                 aligner: AudioAligner::new(alignment),
                 metrics: MetricCalculator::new(),
-                reference_features,
+                reference_features_cache,
+                reference_alignment_cache,
+                active_clip: ClipVariant::Original,
                 learner_buffer: Vec::new(),
                 reference_samples: reference.samples.len(),
                 latency_budget_ms,
@@ -445,15 +455,60 @@ pub mod engine {
             self.latency_budget_ms
         }
 
-        pub fn reference_alignment(&self) -> AlignmentReport {
+        pub fn reference_alignment(&self, variant: ClipVariant) -> AlignmentReport {
+            self.get_reference_alignment(variant)
+                .cloned()
+                .unwrap_or_else(|_| {
+                    warn!("cache miss for reference alignment, returning default");
+                    AlignmentReport::default()
+                })
+        }
+
+        fn get_reference_features(&self, variant: ClipVariant) -> Result<&PronunciationFeatures> {
+            self.reference_features_cache.get(&variant).ok_or_else(|| {
+                PronunciationError::new(format!("cache miss for variant: {:?}", variant))
+            })
+        }
+
+        fn get_reference_alignment(&self, variant: ClipVariant) -> Result<&AlignmentReport> {
+            self.reference_alignment_cache.get(&variant).ok_or_else(|| {
+                PronunciationError::new(format!("cache miss for variant: {:?}", variant))
+            })
+        }
+
+        fn create_reference_alignment(
+            features: &PronunciationFeatures,
+            sample_count: usize,
+        ) -> AlignmentReport {
             let mut alignment = AlignmentReport::default();
             alignment.total_duration =
-                Duration::from_secs_f32(self.reference_samples as f32 / TARGET_SAMPLE_RATE as f32);
-            alignment.reference_energy = self.reference_features.energy.to_vec();
-            alignment.reference_pitch = self.reference_features.pitch_contour.to_vec();
+                Duration::from_secs_f32(sample_count as f32 / TARGET_SAMPLE_RATE as f32);
+            alignment.reference_energy = features.energy.to_vec();
+            alignment.reference_pitch = features.pitch_contour.to_vec();
             alignment.similarity_band = normalize_band(&alignment.reference_energy);
             alignment.contour_band = alignment.reference_pitch.clone();
             alignment
+        }
+
+        pub fn set_active_clip(&mut self, variant: ClipVariant) {
+            self.active_clip = variant;
+        }
+
+        pub fn invalidate_flowalyzed_cache(&mut self) {
+            self.reference_features_cache
+                .remove(&ClipVariant::Flowalyzed);
+            self.reference_alignment_cache
+                .remove(&ClipVariant::Flowalyzed);
+        }
+
+        pub fn cache_flowalyzed_features(&mut self, clip: &RecordedClip) -> Result<()> {
+            let features = self.extractor.extract(clip)?;
+            let alignment = Self::create_reference_alignment(&features, clip.samples.len());
+            self.reference_features_cache
+                .insert(ClipVariant::Flowalyzed, features);
+            self.reference_alignment_cache
+                .insert(ClipVariant::Flowalyzed, alignment);
+            Ok(())
         }
 
         fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
@@ -470,7 +525,8 @@ pub mod engine {
             let start = Instant::now();
             let clip = RecordedClip::from_samples(self.learner_buffer.clone(), TARGET_SAMPLE_RATE);
             let features = self.extractor.extract(&clip)?;
-            let alignment = self.aligner.align(&self.reference_features, &features)?;
+            let ref_features = self.get_reference_features(self.active_clip)?;
+            let alignment = self.aligner.align(ref_features, &features)?;
             let scores = self.metrics.score(&alignment)?;
             let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
             Ok(Some(SnapshotUpdate {
@@ -650,7 +706,7 @@ impl EngineRunner {
         );
         info!("computing initial reference alignment");
         let alignment_start = Instant::now();
-        let initial_alignment = engine.reference_alignment();
+        let initial_alignment = engine.reference_alignment(ClipVariant::Original);
         let alignment_elapsed = alignment_start.elapsed();
         info!(
             elapsed_secs = alignment_elapsed.as_secs_f64(),

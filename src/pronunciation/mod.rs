@@ -61,7 +61,7 @@ pub struct RecordedClip {
 }
 
 /// Clip variant type for tracking active reference clip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClipVariant {
     Original,
     Flowalyzed,

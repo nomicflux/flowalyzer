@@ -258,9 +258,118 @@
   - Note: `flowalyzed_reference` and `flowalyzed_metadata` deferred to Phase 4.2 when clips are actually generated
 
 ### Phase 2.2 – Analysis Cache Management
-- Associate cached `PronunciationFeatures`/`AlignmentReport` with clip identity to enable reuse between toggles.
-- Invalidate previous flowalyzed caches when a new variant replaces them; retain original reference caches.
-- Files: `src/pronunciation/session.rs`, `src/pronunciation/alignment.rs`, tests verifying cache reuse/invalidation.
+- [ ] **Planning Documentation**: Have you consulted/created/updated docs/current-plans/[FEATURE].md?
+- [ ] **Code Simplicity**: Are you following simplicity rules? (functions <20 lines, pure functions, no defensive coding)
+- [ ] **Code Modularity**: Are you following modularity rules? (helper functions, low cyclomatic complexity)
+- [ ] **Scope Control**: Are you accomplishing the user's instructions and NOTHING MORE?
+- [ ] **No Dead Code**: Did you leave dead code? (no future-proofing, no leaving just for tests)
+- [ ] **No Fake Constructions**: Are there any object instances that are purely for the sake of passing a type checker? (e.g. fake credentials, a blank user state)? This means the code should be rearchitected so that either the object doesn't need to be passed, or a real instance passed through instead.
+- [ ] **Code Purpose**: Do you changes accomplish the plan purpose and not just mechanical checklists?
+- [ ] **Required Tests**: Have you added tests for any new functions?
+
+**Objective**: Associate cached `PronunciationFeatures`/`AlignmentReport` with clip identity to enable reuse between toggles. Invalidate previous flowalyzed caches when a new variant replaces them; retain original reference caches.
+
+**Implementation Details**:
+
+1. **Replace single `reference_features` with HashMap cache**:
+   - Current: `SessionEngine.reference_features: PronunciationFeatures` (session.rs:338)
+   - Target: `reference_features_cache: HashMap<ClipVariant, PronunciationFeatures>`
+   - Location: `src/pronunciation/session.rs::engine::SessionEngine` struct (line 333)
+   - Initialization: Extract features for `ClipVariant::Original` at engine creation (lines 353-375)
+   - Access: Add `get_reference_features(&self, variant: ClipVariant) -> &PronunciationFeatures` method
+
+2. **Add reference alignment cache**:
+   - Current: `reference_alignment()` method (session.rs:448-456) computes alignment on-demand using only reference features
+   - Target: Cache `AlignmentReport` per clip variant for reference-only alignment
+   - Storage: `reference_alignment_cache: HashMap<ClipVariant, AlignmentReport>`
+   - Initialization: Compute and cache alignment for `ClipVariant::Original` at engine creation
+   - Access: Add `get_reference_alignment(&self, variant: ClipVariant) -> &AlignmentReport` method
+   - Note: This caches the reference-only alignment (used for UI display), not the full learner-vs-reference alignment computed during recording
+
+3. **Update `SessionEngine::new()` to populate caches**:
+   - Extract features for original clip (existing logic, lines 360-375)
+   - Store in cache: `reference_features_cache.insert(ClipVariant::Original, reference_features)`
+   - Compute reference alignment using cached features
+   - Store in cache: `reference_alignment_cache.insert(ClipVariant::Original, alignment)`
+   - Remove single `reference_features` field
+
+4. **Update `process_chunk()` to use cached features**:
+   - Current: Uses `self.reference_features` directly (line 473)
+   - Target: Retrieve features from cache based on active clip variant
+   - Implementation: `let ref_features = self.get_reference_features(active_variant)?;`
+   - Note: Active variant will come from `EngineRunner.active_clip` (needs to be passed to engine or stored in engine)
+
+5. **Add cache invalidation method**:
+   - Function: `invalidate_flowalyzed_cache(&mut self)`
+   - Behavior: Remove `ClipVariant::Flowalyzed` entries from both caches
+   - Called: When new flowalyzed clip replaces old one (Phase 4.2)
+   - Safety: Never invalidates `ClipVariant::Original` cache
+
+6. **Add cache population method for flowalyzed clip**:
+   - Function: `cache_flowalyzed_features(&mut self, clip: &RecordedClip) -> Result<()>`
+   - Behavior: Extract features from flowalyzed clip, compute reference alignment, store in caches
+   - Called: When flowalyzed clip is generated (Phase 4.2)
+   - Error handling: Return `PronunciationError` if feature extraction fails
+
+7. **Update `reference_alignment()` method**:
+   - Current: Uses `self.reference_features` directly (line 448)
+   - Target: Accept `variant: ClipVariant` parameter, retrieve from cache
+   - Signature: `pub fn reference_alignment(&self, variant: ClipVariant) -> AlignmentReport`
+   - Fallback: If cache miss, return default (shouldn't happen in normal operation)
+
+8. **Update `EngineRunner` to pass active clip to engine**:
+   - Current: Engine doesn't know which clip variant is active
+   - Options:
+     a) Store `active_clip: ClipVariant` in `SessionEngine` and update when toggled
+     b) Pass `active_clip` parameter to `process_chunk()` and `reference_alignment()`
+   - Recommendation: Option (a) - store in engine for simpler API
+   - Update: Add `active_clip: ClipVariant` field to `SessionEngine`, initialize to `Original`
+   - Add: `set_active_clip(&mut self, variant: ClipVariant)` method
+
+9. **Update `EngineRunner::build()` to initialize engine with active clip**:
+   - Current: Creates engine with original clip (line 631)
+   - Target: Engine initialized with `active_clip: ClipVariant::Original`
+   - No other changes needed at this phase
+
+**Files to Modify**:
+- `src/pronunciation/session.rs`:
+  - Update `SessionEngine` struct (line 333): Replace `reference_features` with `HashMap<ClipVariant, PronunciationFeatures>` and add `HashMap<ClipVariant, AlignmentReport>`
+  - Add `active_clip: ClipVariant` field to `SessionEngine`
+  - Update `SessionEngine::new()` (line 347): Populate caches instead of single field
+  - Update `process_chunk()` (line 459): Use cached features via `get_reference_features()`
+  - Update `reference_alignment()` (line 448): Accept variant parameter, use cache
+  - Add `get_reference_features()` helper method
+  - Add `get_reference_alignment()` helper method
+  - Add `invalidate_flowalyzed_cache()` method
+  - Add `cache_flowalyzed_features()` method
+  - Add `set_active_clip()` method
+
+**Files to Create**:
+- `tests/cache_management.rs` (new test file):
+  - Test: Cache populated for original clip at engine creation
+  - Test: Cache retrieval returns correct features for original variant
+  - Test: Cache invalidation removes only flowalyzed entries
+  - Test: Original cache retained after invalidation
+  - Test: Cache miss returns error (edge case)
+  - Test: Reference alignment cached correctly
+  - Test: Active clip switching updates engine state
+
+**Deliverables**:
+- `SessionEngine` uses HashMap-based caching for features and alignment keyed by `ClipVariant`
+- Original clip features and alignment cached at engine creation
+- Cache invalidation method removes only flowalyzed entries
+- Cache population method for flowalyzed clips (called in Phase 4.2)
+- Active clip tracking in engine for feature retrieval
+- Unit tests verifying cache behavior, invalidation, and retention rules
+
+**Completion Reminder**:
+- [ ] The explicit process is important. Circumventing process is a failure. The process is the goal. Your work will be reverted if you fail these end-phase steps.
+- [ ] Run the FULL test suite, and upon 100% success update a status document with progress. Do not use grep, head, tail, or other tools to summarize - read the full output.
+- [ ] Then, run cargo clippy for the full workspace, waiting for 100% success rates. Again, read the full output.
+- [ ] Test or clippy failures from code not actively worked on are still your responsibility - code must be 100% clean before continuing.
+- [ ] Dead code is plan failure - code should be written when it is used, not written ahead of time. You are not allowed to use `#[allow(dead_code)]` to make clippy pass - your work will be reverted if you do so.
+- [ ] Finally, run cargo fmt.
+- [ ] ALL agents must STOP and wait for EXPLICIT approval at the end of EACH phase.
 
 ### Phase 2.3 – Flowalyzer Recipe Application Hook
 - Integrate Flowalyzer recipe pipeline to generate new `AudioData` segments, convert to `RecordedClip`.
