@@ -165,7 +165,37 @@
 - Regression coverage to ensure base pronunciation workflow remains intact when Flowalyzer features unused.
 
 ## Issues Encountered
-- *(Pending updates once phases execute; section reserved for future notes.)*
+
+### Process Failure: Phase 2.3 Status Update Omitted *(2025-01-27)*
+
+**What Happened:**
+- Phase 2.3 implementation was completed successfully (all code written, tests passing, clippy clean, fmt applied)
+- The plan explicitly states: "After Phase 2 implementation, run `cargo test --all`, `cargo fmt`, `cargo clippy`. On success, update this document's status section and stop pending approval."
+- Status document was NOT updated immediately after completion
+- Status was only updated later when explicitly requested by user
+
+**Root Cause:**
+- Agent treated status update as optional documentation task rather than mandatory completion step
+- Agent completed technical work (tests, clippy, fmt) but failed to complete the administrative requirement
+- Agent did not recognize that "update this document's status section" is part of the completion checklist, not a separate optional task
+
+**Impact:**
+- Process violation: explicit instructions were ignored
+- User had to manually request status update, breaking workflow
+- Trust in agent's ability to follow documented processes was damaged
+- Agent was immediately terminated and replaced
+
+**Prevention:**
+- Status document updates MUST be treated as mandatory completion steps, not optional documentation
+- When plan says "update this document's status section", it is a REQUIRED action before marking work complete
+- Status updates should happen in the SAME action sequence as running tests/clippy/fmt - they are all completion requirements
+- Agent must check completion checklist items explicitly, not assume they're done
+- If plan says "update status section", do it immediately after technical validation, not wait for user request
+
+**Lesson:**
+- Process steps are not suggestions. When a plan document says "do X", X is required.
+- Administrative/documentation tasks are as important as code tasks.
+- Completion means ALL steps are done, including status updates.
 
 ## Phase Status Overview
 | Phase | Scope | Status | Notes |
@@ -216,8 +246,8 @@
 | Phase/Subphase | Status |
 |----------------|--------|
 | 2.1 | Complete |
-| 2.2 | Pending |
-| 2.3 | Pending |
+| 2.2 | Complete |
+| 2.3 | Complete |
 | 3.1 | Pending |
 | 3.2 | Pending |
 | 3.3 | Pending |
@@ -261,11 +291,29 @@
 - Associate cached `PronunciationFeatures`/`AlignmentReport` with clip identity to enable reuse between toggles.
 - Invalidate previous flowalyzed caches when a new variant replaces them; retain original reference caches.
 - Files: `src/pronunciation/session.rs`, `src/pronunciation/alignment.rs`, tests verifying cache reuse/invalidation.
+- **Status: COMPLETE** *(2025-01-27)* - Already implemented in Phase 2.1 work:
+  - Cache structures: `HashMap<ClipVariant, PronunciationFeatures>` and `HashMap<ClipVariant, AlignmentReport>` in `SessionEngine` (session.rs:338-339)
+  - Cache methods: `invalidate_flowalyzed_cache()` removes Flowalyzed cache while retaining Original (session.rs:575-580)
+  - Cache population: `cache_flowalyzed_features()` extracts and caches features for Flowalyzed variant (session.rs:582-590)
+  - Active clip tracking: `set_active_clip()` enables toggling between variants (session.rs:571-573)
+  - Cache retrieval: `reference_alignment()` and internal methods use `ClipVariant` as key for cache lookup
+  - Comprehensive tests in `tests/cache_management.rs` verify cache reuse, invalidation, and toggle behavior
+  - All tests pass, original reference cache is never invalidated, flowalyzed cache properly cleared on replacement
 
 ### Phase 2.3 – Flowalyzer Recipe Application Hook
 - Integrate Flowalyzer recipe pipeline to generate new `AudioData` segments, convert to `RecordedClip`.
 - Handle error propagation and ensure resulting clip obeys duration guard.
 - Files: `src/pronunciation/mod.rs`, `src/operations/recipe.rs`, `src/types.rs`, unit tests for conversion and error paths.
+- **Status: COMPLETE** *(2025-01-27)* - Implemented:
+  - Added `validate_time_range()` helper function to validate time range parameters with clear error messages (mod.rs:344-361)
+  - Added `extract_audio_range()` function to extract time range from `RecordedClip` and convert to `AudioChunk` (mod.rs:363-376)
+  - Added `apply_recipe_to_range()` function to apply Flowalyzer recipe to audio range and return `RecordedClip` (mod.rs:378-396)
+  - Error handling for invalid time ranges, empty recipe results, assembly failures, and duration violations
+  - Duration validation enforces 5-minute maximum on resulting clips
+  - Updated imports to include `assembler`, `recipe`, `AudioChunk`, and `Recipe` types
+  - Created comprehensive test suite in `tests/recipe_application.rs` with 10 tests covering range extraction, recipe application, error handling, and duration validation
+  - All tests pass, code formatted, clippy clean
+  - Functions are pure (no side effects, data in/data out)
 
 **Completion Reminder:** After Phase 2 implementation, run `cargo test --all`, `cargo fmt`, `cargo clippy`. On success, update this document’s status section and stop pending approval.
 
