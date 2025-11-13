@@ -249,7 +249,7 @@
 | 2.2 | Complete |
 | 2.3 | Complete |
 | 3.1 | Complete |
-| 3.2 | Pending |
+| 3.2 | Complete |
 | 3.3 | Pending |
 | 4.1 | Pending |
 | 4.2 | Pending |
@@ -350,6 +350,19 @@
 - Build recipe editor panel (steps list, repeat/speed/silence controls, presets, validation messages).
 - Serialize into Flowalyzer runtime recipe format for backend consumption.
 - Files: `src/ui/components/recipe_builder.rs` (new), `src/ui/screens/session.rs`, UI serialization tests.
+- **Status: COMPLETE** *(2025-11-13)* - Implemented:
+  - Created `src/ui/components/recipe_builder.rs` with `RecipeBuilderState`, `RecipeBuilder`, `RecipeBuilderOutput` structs
+  - Added validation functions: `validate()` checks for empty steps, zero repeat count, zero/negative speed factor
+  - Added conversion function: `to_runtime_recipe()` produces `RuntimeRecipe` for backend
+  - Implemented preset support: `from_preset("language_learning")` loads 6-step preset (3x slow, 3x normal, 3x fast with silence gaps)
+  - Added UI rendering: `show()` method displays name input, preset selector, steps list with add/remove buttons, per-step controls (repeat slider 1-10, speed slider 0.25-2.0, silent checkbox), validation error display
+  - Updated `src/ui/components/mod.rs` to export recipe_builder module and types
+  - Integrated into SessionApp: added `recipe_builder_state` and `staged_recipe` fields, implemented `show_recipe_builder()` method (13 lines)
+  - Added helper methods: `should_show_recipe_builder()` (4 lines), `render_recipe_builder_panel()` (9 lines), `apply_recipe()` (4 lines), `clear_recipe_builder()` (4 lines)
+  - Added state management: builder appears when range selection active, clears when selection removed or recording starts
+  - Created comprehensive unit tests in recipe_builder.rs module: 13 tests covering validation, conversion, preset loading, state management
+  - All tests pass (65 unit tests + 3 doc tests), clippy clean, code formatted, no dead code
+  - Recipe builder renders as right side panel, staged recipe displays "ready to apply" message (Phase 4 will add apply command)
 
 ### Phase 3.3 – UI State Persistence & Feedback
 - Persist selection/recipe state in session app until user applies changes; reset on session reloads.

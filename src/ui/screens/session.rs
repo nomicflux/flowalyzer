@@ -6,10 +6,14 @@ use crate::pronunciation::{
     AlignedPhoneme, AlignmentReport, Result as SessionResult, SessionController, SessionHandle,
     SessionSnapshot,
 };
+use crate::types::RuntimeRecipe;
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
 use crate::ui::components::phoneme_timeline::PhonemeTimeline;
 use crate::ui::components::pitch::PitchView;
 use crate::ui::components::range_selection::{RangeSelection, SelectionError};
+use crate::ui::components::recipe_builder::{
+    RecipeBuilder, RecipeBuilderOutput, RecipeBuilderState,
+};
 use crate::ui::components::spectrogram::{SpectrogramData, SpectrogramView};
 use crate::ui::components::waveform::WaveformView;
 
@@ -31,6 +35,8 @@ pub struct SessionApp {
     learner_pitch: Vec<f32>,
     range_selection: Option<RangeSelection>,
     selection_error: Option<SelectionError>,
+    recipe_builder_state: Option<RecipeBuilderState>,
+    staged_recipe: Option<RuntimeRecipe>,
 }
 
 impl SessionApp {
@@ -52,6 +58,8 @@ impl SessionApp {
             learner_pitch: Vec::new(),
             range_selection: None,
             selection_error: None,
+            recipe_builder_state: None,
+            staged_recipe: None,
         };
         app.sync_visuals();
         app
@@ -276,6 +284,7 @@ impl SessionApp {
             if output.changed {
                 self.range_selection = output.selection;
                 self.selection_error = output.validation_error;
+                self.update_recipe_builder_visibility();
             }
 
             ui.end_row();
@@ -289,6 +298,63 @@ impl SessionApp {
             .show(ui);
             ui.end_row();
         });
+    }
+
+    fn update_recipe_builder_visibility(&mut self) {
+        match self.range_selection {
+            Some(_) if self.recipe_builder_state.is_none() => {
+                self.recipe_builder_state = Some(RecipeBuilderState::new());
+            }
+            None => {
+                self.recipe_builder_state = None;
+                self.staged_recipe = None;
+            }
+            _ => {}
+        }
+    }
+
+    fn show_recipe_builder(&mut self, ctx: &egui::Context) {
+        if !self.should_show_recipe_builder() {
+            return;
+        }
+
+        let (apply_requested, clear_requested) = self.render_recipe_builder_panel(ctx);
+
+        if apply_requested {
+            self.apply_recipe();
+        }
+        if clear_requested {
+            self.clear_recipe_builder();
+        }
+    }
+
+    fn should_show_recipe_builder(&self) -> bool {
+        self.range_selection.is_some()
+            && !self.snapshot.recording
+            && self.recipe_builder_state.is_some()
+    }
+
+    fn render_recipe_builder_panel(&mut self, ctx: &egui::Context) -> (bool, bool) {
+        egui::SidePanel::right("recipe_builder")
+            .resizable(true)
+            .show(ctx, |ui| {
+                let state = self.recipe_builder_state.as_mut().unwrap();
+                let output = render_recipe_builder(state, &self.staged_recipe, ui);
+                (output.apply_requested, output.clear_requested)
+            })
+            .inner
+    }
+
+    fn apply_recipe(&mut self) {
+        if let Some(state) = &self.recipe_builder_state {
+            self.staged_recipe = Some(state.to_runtime_recipe());
+        }
+    }
+
+    fn clear_recipe_builder(&mut self) {
+        self.recipe_builder_state = None;
+        self.staged_recipe = None;
+        self.range_selection = None;
     }
 
     fn show_pitch(&self, ui: &mut egui::Ui) {
@@ -312,6 +378,7 @@ impl eframe::App for SessionApp {
         self.show_top_panel(ctx, &mut actions);
         self.apply_actions(actions);
         self.show_timeline(ctx);
+        self.show_recipe_builder(ctx);
         self.show_main(ctx);
     }
 }
@@ -420,4 +487,30 @@ fn normalize_series(mut samples: Vec<f32>) -> Vec<f32> {
         *value = (*value / peak).clamp(-1.0, 1.0);
     }
     samples
+}
+
+fn render_recipe_builder(
+    state: &mut RecipeBuilderState,
+    staged_recipe: &Option<RuntimeRecipe>,
+    ui: &mut egui::Ui,
+) -> RecipeBuilderOutput {
+    let mut builder = RecipeBuilder {
+        state,
+        enabled: true,
+    };
+    let output = builder.show(ui);
+
+    if staged_recipe.is_some() {
+        ui.separator();
+        show_staged_recipe_message(ui);
+    }
+
+    output
+}
+
+fn show_staged_recipe_message(ui: &mut egui::Ui) {
+    ui.colored_label(
+        egui::Color32::from_rgb(30, 180, 80),
+        "Recipe ready to apply (Phase 4 will add apply command)",
+    );
 }
