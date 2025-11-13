@@ -22,6 +22,7 @@ use crate::audio::{decoder, resample};
 use crate::types::AudioData;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
+const MAX_CLIP_DURATION_SECS: u64 = 300; // 5 minutes
 
 pub use session::{SessionController, SessionHandle, SessionRuntime, SessionSnapshot};
 
@@ -57,6 +58,13 @@ pub struct RecordedClip {
     pub sample_rate: u32,
     pub channels: u8,
     pub duration: Duration,
+}
+
+/// Clip variant type for tracking active reference clip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipVariant {
+    Original,
+    Flowalyzed,
 }
 
 /// Feature batch placeholder backing future spectral analysis outputs.
@@ -298,7 +306,7 @@ fn validate_config(config: &SessionConfig) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn load_clip(path: &Path) -> Result<RecordedClip> {
+pub fn load_clip(path: &Path) -> Result<RecordedClip> {
     if !path.exists() {
         let err_msg = format!("audio file {:?} does not exist", path);
         error!(path = %path.display(), "{}", err_msg);
@@ -309,11 +317,25 @@ pub(super) fn load_clip(path: &Path) -> Result<RecordedClip> {
         error!(path = %path.display(), error = %err_msg, "failed to decode audio file");
         PronunciationError::new(err_msg)
     })?;
-    clip_from_audio(audio)
+    let clip = clip_from_audio(audio)?;
+    validate_clip_duration(&clip)?;
+    Ok(clip)
 }
 
 pub(super) fn clip_from_audio(audio: AudioData) -> Result<RecordedClip> {
     let samples = resample::linear_resample(&audio.samples, audio.sample_rate, TARGET_SAMPLE_RATE)
         .map_err(|err| PronunciationError::new(err.to_string()))?;
     Ok(RecordedClip::from_samples(samples, TARGET_SAMPLE_RATE))
+}
+
+fn validate_clip_duration(clip: &RecordedClip) -> Result<()> {
+    let duration_secs = clip.duration.as_secs();
+    if duration_secs > MAX_CLIP_DURATION_SECS {
+        Err(PronunciationError::new(format!(
+            "clip duration {} seconds exceeds maximum of {} seconds",
+            duration_secs, MAX_CLIP_DURATION_SECS
+        )))
+    } else {
+        Ok(())
+    }
 }

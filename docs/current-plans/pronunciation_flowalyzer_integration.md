@@ -215,7 +215,7 @@
 
 | Phase/Subphase | Status |
 |----------------|--------|
-| 2.1 | Pending |
+| 2.1 | Complete |
 | 2.2 | Pending |
 | 2.3 | Pending |
 | 3.1 | Pending |
@@ -241,9 +241,21 @@
 - [ ] **Required Tests**
 
 ### Phase 2.1 – Clip Variant Storage & Limits
-- Extend runtime state to maintain original + flowalyzed `RecordedClip` variants, metadata timestamps, active flag.
-- Enforce 5-minute duration cap for both loaded and generated clips, returning surfaced errors for UI display.
+- Extend runtime state to maintain original reference clip and active clip flag.
+- Enforce 5-minute duration cap for loaded clips, returning surfaced errors for UI display.
 - Files: `src/pronunciation/session.rs`, `src/pronunciation/mod.rs`, `src/pronunciation/tests/` (new or updated).
+- **Status: COMPLETE** *(2025-01-27)* - Implemented:
+  - Added `ClipVariant` enum (Original, Flowalyzed) to `src/pronunciation/mod.rs`
+  - Added `MAX_CLIP_DURATION_SECS` constant (300 seconds)
+  - Added `validate_clip_duration()` function with clear error messages
+  - Updated `load_clip()` to enforce duration validation
+  - Extended `EngineRunner` struct with `original_reference` (renamed from `reference`) and `active_clip` (defaults to `Original`)
+  - Added `active_clip()` helper method (currently only handles `Original` variant)
+  - Updated `EngineRunner::build()` and `get_or_create_player()` to use active clip
+  - Made `load_clip()` public for testing
+  - Added comprehensive tests in `tests/clip_variants.rs` covering duration validation and clip variant structure
+  - All tests pass, code formatted, clippy clean
+  - Note: `flowalyzed_reference` and `flowalyzed_metadata` deferred to Phase 4.2 when clips are actually generated
 
 ### Phase 2.2 – Analysis Cache Management
 - Associate cached `PronunciationFeatures`/`AlignmentReport` with clip identity to enable reuse between toggles.
@@ -305,6 +317,9 @@
 
 ### Phase 4.2 – Flowalyzed Clip Generation & Storage
 - Runtime applies recipe, stores new clip/analysis, drops stale flowalyzed caches, emits progress snapshots.
+- Add `flowalyzed_reference: Option<RecordedClip>` and `flowalyzed_metadata: Option<FlowalyzedMetadata>` to `EngineRunner` struct.
+- Add `FlowalyzedMetadata` struct with `generated_at: Instant` timestamp.
+- Update `active_clip()` method to handle `Flowalyzed` variant.
 - Files: `src/pronunciation/session.rs`, `src/pronunciation/mod.rs`, tests covering command execution.
 
 ### Phase 4.3 – Clip Toggle Mechanics

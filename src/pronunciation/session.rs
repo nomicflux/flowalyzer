@@ -17,8 +17,8 @@ use super::features::FeatureExtractor;
 use super::metrics::MetricCalculator;
 use super::validate_config;
 use super::{
-    load_clip, AlignmentReport, PronunciationError, PronunciationFeatures, PronunciationScores,
-    RecordedClip, Result, SessionConfig, TARGET_SAMPLE_RATE,
+    load_clip, AlignmentReport, ClipVariant, PronunciationError, PronunciationFeatures,
+    PronunciationScores, RecordedClip, Result, SessionConfig, TARGET_SAMPLE_RATE,
 };
 
 const CAPTURE_POLL_MS: u64 = 20;
@@ -600,7 +600,8 @@ pub mod engine {
 
 struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
-    reference: RecordedClip,
+    original_reference: RecordedClip,
+    active_clip: ClipVariant,
     initial_snapshot: SessionSnapshot,
     player: Option<ReferencePlayer>,
 }
@@ -611,11 +612,11 @@ impl EngineRunner {
             path = %config.reference_wav.display(),
             "loading reference WAV file"
         );
-        let reference = load_clip(&config.reference_wav)?;
+        let original_reference = load_clip(&config.reference_wav)?;
         info!(
-            duration_secs = reference.duration.as_secs_f64(),
-            sample_rate = reference.sample_rate,
-            samples = reference.samples.len(),
+            duration_secs = original_reference.duration.as_secs_f64(),
+            sample_rate = original_reference.sample_rate,
+            samples = original_reference.samples.len(),
             "reference WAV loaded successfully"
         );
         info!(
@@ -628,7 +629,7 @@ impl EngineRunner {
         info!("creating session engine (this will extract features from reference)");
         let build_start = Instant::now();
         let engine = engine::SessionEngine::new(
-            reference.clone(),
+            original_reference.clone(),
             config.alignment,
             config.latency_budget_ms,
             capture,
@@ -666,10 +667,20 @@ impl EngineRunner {
         );
         Ok(Self {
             engine,
-            reference,
+            original_reference,
+            active_clip: ClipVariant::Original,
             initial_snapshot,
             player: None,
         })
+    }
+
+    fn active_clip(&self) -> &RecordedClip {
+        match self.active_clip {
+            ClipVariant::Original => &self.original_reference,
+            ClipVariant::Flowalyzed => {
+                panic!("active_clip is Flowalyzed but flowalyzed_reference not implemented until Phase 4.2")
+            }
+        }
     }
 
     fn run(mut self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
@@ -707,7 +718,7 @@ impl EngineRunner {
 
     fn get_or_create_player(&mut self) -> Result<&mut ReferencePlayer> {
         if self.player.is_none() {
-            self.player = Some(ReferencePlayer::new(&self.reference)?);
+            self.player = Some(ReferencePlayer::new(self.active_clip())?);
         }
         Ok(self.player.as_mut().unwrap())
     }
