@@ -40,7 +40,7 @@ pub(super) fn extract_pitch_contour(
     // feature alignment. The aus wrapper uses default win_length=frame_len/2 and
     // hop_length=frame_len/4, which is appropriate for pitch estimation.
     let frame_len = frame_length_samples();
-    
+
     info!(
         frame_len,
         audio_samples = audio.len(),
@@ -54,13 +54,8 @@ pub(super) fn extract_pitch_contour(
     // in dev mode (see Cargo.toml), this meets performance targets:
     // - <1s for 1s audio
     // - <10s for 10s audio
-    let (_timestamps, pitches, voiced_flags, _confidence) = analysis::pyin_pitch_estimator(
-        &audio,
-        TARGET_SAMPLE_RATE,
-        FREQ_MIN,
-        FREQ_MAX,
-        frame_len,
-    );
+    let (_timestamps, pitches, voiced_flags, _confidence) =
+        analysis::pyin_pitch_estimator(&audio, TARGET_SAMPLE_RATE, FREQ_MIN, FREQ_MAX, frame_len);
     let pyin_elapsed = start.elapsed();
     info!(
         elapsed_secs = pyin_elapsed.as_secs_f64(),

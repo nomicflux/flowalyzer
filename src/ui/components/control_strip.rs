@@ -25,10 +25,8 @@ impl ControlStrip {
             if stop_replay_button(ui) {
                 output.stop_replay = true;
             }
-        } else {
-            if replay_button(ui, self.is_recording) {
-                output.replay_reference = true;
-            }
+        } else if replay_button(ui, self.is_recording) {
+            output.replay_reference = true;
         }
         ui.separator();
         latency_badge(ui, self.latency_ms, self.latency_budget_ms);

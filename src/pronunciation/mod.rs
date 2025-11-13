@@ -240,7 +240,7 @@ impl SessionConfig {
     pub fn with_latency_budget(mut self, budget_ms: u32) -> Self {
         self.latency_budget_ms = budget_ms.max(1);
         self
-}
+    }
 }
 
 /// Primary orchestration entry point for the pronunciation pipeline.
