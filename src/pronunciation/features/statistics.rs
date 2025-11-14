@@ -2,6 +2,9 @@ use anyhow::Result;
 use aus::analysis;
 use ndarray::{Array1, Array2, Axis};
 
+use super::FeatureExtractionEvent;
+use super::FeatureExtractionPhase;
+
 const MFCC_COUNT: usize = 13;
 const DELTA_WINDOW: usize = 2;
 const EPSILON: f32 = 1e-12;
@@ -15,19 +18,40 @@ pub(crate) struct FeatureMatrices {
     pub delta_deltas: Array2<f32>,
 }
 
-pub(crate) fn assemble_features(
+pub(crate) fn assemble_features_with_progress<F>(
     mel_spectrogram: &[Vec<f64>],
     magnitude_spectrogram: &[Vec<f64>],
     power_spectrogram: &[Vec<f64>],
-) -> Result<FeatureMatrices> {
+    frame_count: usize,
+    reporter: &mut F,
+) -> Result<FeatureMatrices>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
     let mel = array_from_vec2(mel_spectrogram);
-    let spectral_flux = compute_spectral_flux(magnitude_spectrogram);
-    let energy = compute_energy(power_spectrogram);
+    reporter(FeatureExtractionEvent::PhaseProgress {
+        phase: FeatureExtractionPhase::FeatureMatrices,
+        label: "Feature rows",
+        current: frame_count as u32,
+        total: frame_count as u32,
+    });
+
+    let spectral_flux =
+        compute_spectral_flux_with_progress(magnitude_spectrogram, frame_count, reporter);
+    let energy = compute_energy_with_progress(power_spectrogram, frame_count, reporter);
 
     let mfcc_raw = analysis::mel::mfcc_spectrogram(mel_spectrogram, MFCC_COUNT, None);
     let mfcc = array_from_vec2(&mfcc_raw);
-    let deltas = compute_delta_matrix(&mfcc, DELTA_WINDOW);
-    let delta_deltas = compute_delta_matrix(&deltas, DELTA_WINDOW);
+    reporter(FeatureExtractionEvent::PhaseProgress {
+        phase: FeatureExtractionPhase::FeatureMatrices,
+        label: "Feature rows",
+        current: frame_count as u32,
+        total: frame_count as u32,
+    });
+
+    let deltas = compute_delta_matrix_with_progress(&mfcc, DELTA_WINDOW, frame_count, reporter);
+    let delta_deltas =
+        compute_delta_matrix_with_progress(&deltas, DELTA_WINDOW, frame_count, reporter);
 
     let mel = normalize_2d(&mel);
     let spectral_flux = normalize_1d(&spectral_flux);
@@ -46,25 +70,20 @@ pub(crate) fn assemble_features(
     })
 }
 
-fn array_from_vec2(data: &[Vec<f64>]) -> Array2<f32> {
-    if data.is_empty() {
-        return Array2::zeros((0, 0));
-    }
-    let rows = data.len();
-    let cols = data[0].len();
-    let mut flat = Vec::with_capacity(rows * cols);
-    for row in data {
-        flat.extend(row.iter().map(|v| *v as f32));
-    }
-    Array2::from_shape_vec((rows, cols), flat).expect("valid mel dimensions")
-}
-
-fn compute_spectral_flux(magnitude: &[Vec<f64>]) -> Array1<f32> {
+fn compute_spectral_flux_with_progress<F>(
+    magnitude: &[Vec<f64>],
+    total: usize,
+    reporter: &mut F,
+) -> Array1<f32>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
     if magnitude.is_empty() {
         return Array1::zeros(0);
     }
     let mut flux = Vec::with_capacity(magnitude.len());
     flux.push(0.0_f32);
+    const REPORT_INTERVAL: usize = 256;
     for i in 1..magnitude.len() {
         let previous = &magnitude[i - 1];
         let current = &magnitude[i];
@@ -74,20 +93,52 @@ fn compute_spectral_flux(magnitude: &[Vec<f64>]) -> Array1<f32> {
             sum += diff * diff;
         }
         flux.push(sum.sqrt() as f32);
+        if i > 0 && i % REPORT_INTERVAL == 0 {
+            reporter(FeatureExtractionEvent::PhaseProgress {
+                phase: FeatureExtractionPhase::FeatureMatrices,
+                label: "Feature rows",
+                current: i as u32,
+                total: total as u32,
+            });
+        }
     }
     Array1::from_vec(flux)
 }
 
-fn compute_energy(power: &[Vec<f64>]) -> Array1<f32> {
+fn compute_energy_with_progress<F>(
+    power: &[Vec<f64>],
+    total: usize,
+    reporter: &mut F,
+) -> Array1<f32>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
     let mut energies = Vec::with_capacity(power.len());
-    for frame in power {
+    const REPORT_INTERVAL: usize = 256;
+    for (idx, frame) in power.iter().enumerate() {
         let sum: f64 = frame.iter().sum();
         energies.push(sum.sqrt() as f32);
+        if idx > 0 && idx % REPORT_INTERVAL == 0 {
+            reporter(FeatureExtractionEvent::PhaseProgress {
+                phase: FeatureExtractionPhase::FeatureMatrices,
+                label: "Feature rows",
+                current: idx as u32,
+                total: total as u32,
+            });
+        }
     }
     Array1::from_vec(energies)
 }
 
-fn compute_delta_matrix(input: &Array2<f32>, window: usize) -> Array2<f32> {
+fn compute_delta_matrix_with_progress<F>(
+    input: &Array2<f32>,
+    window: usize,
+    total: usize,
+    reporter: &mut F,
+) -> Array2<f32>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
     if input.is_empty() {
         return Array2::zeros((0, 0));
     }
@@ -100,6 +151,7 @@ fn compute_delta_matrix(input: &Array2<f32>, window: usize) -> Array2<f32> {
             .sum::<f32>()
             .max(EPSILON);
 
+    const REPORT_INTERVAL: usize = 256;
     for t in 0..frames {
         let mut numerator = Array1::zeros(coeffs);
         for n in 1..=window {
@@ -113,9 +165,30 @@ fn compute_delta_matrix(input: &Array2<f32>, window: usize) -> Array2<f32> {
         output
             .row_mut(t)
             .assign(&(&numerator / denominator.max(EPSILON)));
+        if t > 0 && t % REPORT_INTERVAL == 0 {
+            reporter(FeatureExtractionEvent::PhaseProgress {
+                phase: FeatureExtractionPhase::FeatureMatrices,
+                label: "Feature rows",
+                current: t as u32,
+                total: total as u32,
+            });
+        }
     }
 
     output
+}
+
+fn array_from_vec2(data: &[Vec<f64>]) -> Array2<f32> {
+    if data.is_empty() {
+        return Array2::zeros((0, 0));
+    }
+    let rows = data.len();
+    let cols = data[0].len();
+    let mut flat = Vec::with_capacity(rows * cols);
+    for row in data {
+        flat.extend(row.iter().map(|v| *v as f32));
+    }
+    Array2::from_shape_vec((rows, cols), flat).expect("valid mel dimensions")
 }
 
 fn normalize_2d(input: &Array2<f32>) -> Array2<f32> {

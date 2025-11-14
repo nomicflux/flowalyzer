@@ -1,5 +1,6 @@
 use aus::analysis;
 use ndarray::Array1;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
 
@@ -7,38 +8,49 @@ use crate::audio::resample;
 use crate::pronunciation::{PronunciationError, RecordedClip, Result};
 
 use super::mel::{TARGET_SAMPLE_RATE, WINDOW_MS};
+use super::FeatureExtractionEvent;
+use super::FeatureExtractionPhase;
 
 const FREQ_MIN: f64 = 55.0;
 const FREQ_MAX: f64 = 1200.0;
 const SMOOTH_WINDOW: usize = 5;
+const HALF_SECOND_SAMPLES: usize = (TARGET_SAMPLE_RATE as usize) / 2;
 
-pub(super) fn extract_pitch_contour(
+pub(super) fn extract_pitch_contour_with_reporting<F>(
     clip: &RecordedClip,
     frame_count: usize,
-) -> Result<Array1<f32>> {
+    reporter: &mut F,
+    start_time: Instant,
+) -> Result<Array1<f32>>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
     info!("ensuring sample rate for pitch extraction");
-    let start = Instant::now();
     let samples = ensure_sample_rate(clip)?;
-    let resample_elapsed = start.elapsed();
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = resample_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         samples = samples.len(),
         "sample rate ensured for pitch"
     );
 
     info!("converting to f64 for pitch");
-    let start = Instant::now();
     let audio: Vec<f64> = samples.into_iter().map(|s| s as f64).collect();
-    let convert_elapsed = start.elapsed();
+    let audio = Arc::new(audio);
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = convert_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         "conversion to f64 complete for pitch"
     );
 
-    // frame_len = 400 samples = 25ms at 16kHz, matching STFT window size
-    // This ensures pitch frames align with mel spectrogram frames for consistent
-    // feature alignment. The aus wrapper uses default win_length=frame_len/2 and
-    // hop_length=frame_len/4, which is appropriate for pitch estimation.
     let frame_len = frame_length_samples();
 
     info!(
@@ -49,14 +61,71 @@ pub(super) fn extract_pitch_contour(
         "extracting pitch contour"
     );
 
-    let start = Instant::now();
-    // Call pyin_pitch_estimator once on full audio. With opt-level=3 for aus/pyin
-    // in dev mode (see Cargo.toml), this meets performance targets:
-    // - <1s for 1s audio
-    // - <10s for 10s audio
-    let (_timestamps, pitches, voiced_flags, _confidence) =
-        analysis::pyin_pitch_estimator(&audio, TARGET_SAMPLE_RATE, FREQ_MIN, FREQ_MAX, frame_len);
-    let pyin_elapsed = start.elapsed();
+    let pyin_start = Instant::now();
+    let hop_samples = frame_len / 4;
+    let expected_pitch_frames = if audio.len() >= frame_len {
+        ((audio.len() - frame_len) / hop_samples) + 1
+    } else {
+        0
+    };
+
+    let chunk_size_samples = HALF_SECOND_SAMPLES.max(frame_len + hop_samples);
+    let overlap_samples = frame_len;
+    let mut all_pitches = Vec::new();
+    let mut all_voiced = Vec::new();
+    let mut total_processed_frames = 0u32;
+
+    let step = chunk_size_samples
+        .saturating_sub(overlap_samples)
+        .max(hop_samples);
+    let mut chunk_start = 0;
+    while chunk_start < audio.len() {
+        let chunk_end = (chunk_start + chunk_size_samples).min(audio.len());
+        let chunk = &audio[chunk_start..chunk_end];
+        if chunk.len() < frame_len {
+            break;
+        }
+
+        let (_timestamps, pitches, voiced_flags, _confidence) = analysis::pyin_pitch_estimator(
+            chunk,
+            TARGET_SAMPLE_RATE,
+            FREQ_MIN,
+            FREQ_MAX,
+            frame_len,
+        );
+
+        let chunk_frames = pitches.len();
+        if chunk_start == 0 {
+            all_pitches.extend_from_slice(&pitches);
+            all_voiced.extend_from_slice(&voiced_flags);
+            total_processed_frames = chunk_frames as u32;
+        } else {
+            let overlap_frames = (overlap_samples / hop_samples).min(chunk_frames);
+            let skip = overlap_frames.min(chunk_frames);
+            all_pitches.extend_from_slice(&pitches[skip..]);
+            all_voiced.extend_from_slice(&voiced_flags[skip..]);
+            total_processed_frames += (chunk_frames - skip) as u32;
+        }
+
+        reporter(FeatureExtractionEvent::PhaseProgress {
+            phase: FeatureExtractionPhase::PitchContour,
+            label: "Pitch frames",
+            current: total_processed_frames,
+            total: expected_pitch_frames as u32,
+        });
+
+        chunk_start = chunk_start.saturating_add(step);
+    }
+
+    let pitches = all_pitches;
+    let voiced_flags = all_voiced;
+    let pyin_elapsed = pyin_start.elapsed();
+    let total_elapsed = start_time.elapsed();
+    let elapsed_secs = total_elapsed.as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
         elapsed_secs = pyin_elapsed.as_secs_f64(),
         pitch_frames = pitches.len(),
@@ -64,43 +133,117 @@ pub(super) fn extract_pitch_contour(
     );
 
     info!("normalizing pitch contour");
-    let start = Instant::now();
     let contour = normalise_contour(&pitches, &voiced_flags);
-    let normalize_elapsed = start.elapsed();
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = normalize_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         "pitch contour normalized"
     );
 
     info!("filling missing pitch values");
-    let start = Instant::now();
-    let filled = fill_missing(&contour);
-    let fill_elapsed = start.elapsed();
+    let total_frames = contour.len();
+    let filled = fill_missing_with_reporting(&contour, reporter, total_frames, start_time);
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = fill_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         "missing pitch values filled"
     );
 
     info!("smoothing pitch contour");
-    let start = Instant::now();
     let smoothed = smooth(&filled, SMOOTH_WINDOW);
-    let smooth_elapsed = start.elapsed();
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = smooth_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         "pitch contour smoothed"
     );
 
     info!("aligning pitch contour to frames");
-    let start = Instant::now();
     let aligned = align_to_frames(&smoothed, frame_count);
-    let align_elapsed = start.elapsed();
+    let elapsed_secs = start_time.elapsed().as_secs() as u32;
+    reporter(FeatureExtractionEvent::PhaseElapsed {
+        phase: FeatureExtractionPhase::PitchContour,
+        elapsed_secs,
+    });
     info!(
-        elapsed_secs = align_elapsed.as_secs_f64(),
+        elapsed_secs = start_time.elapsed().as_secs_f64(),
         aligned_frames = aligned.len(),
         "pitch contour aligned"
     );
 
     Ok(Array1::from(aligned))
+}
+
+fn fill_missing_with_reporting<F>(
+    values: &[Option<f32>],
+    reporter: &mut F,
+    total_frames: usize,
+    start_time: Instant,
+) -> Vec<f32>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
+    const REPORT_INTERVAL: usize = 256;
+    let mut filled =
+        forward_fill_with_reporting(values, reporter, total_frames, REPORT_INTERVAL, start_time);
+    backward_fill(&mut filled);
+    filled.iter_mut().for_each(|v| {
+        if v.is_nan() {
+            *v = 0.0;
+        }
+    });
+    filled
+}
+
+fn forward_fill_with_reporting<F>(
+    values: &[Option<f32>],
+    reporter: &mut F,
+    total: usize,
+    interval: usize,
+    start_time: Instant,
+) -> Vec<f32>
+where
+    F: FnMut(FeatureExtractionEvent),
+{
+    let mut filled = vec![f32::NAN; values.len()];
+    let mut last = None;
+    let mut last_elapsed_secs = 0u32;
+    for (idx, value) in values.iter().enumerate() {
+        if let Some(v) = value {
+            filled[idx] = *v;
+            last = Some(*v);
+        } else if let Some(prev) = last {
+            filled[idx] = prev;
+        }
+        if idx > 0 && idx % interval == 0 {
+            reporter(FeatureExtractionEvent::PhaseProgress {
+                phase: FeatureExtractionPhase::PitchContour,
+                label: "Processing frames",
+                current: idx as u32,
+                total: total as u32,
+            });
+        }
+        let current_elapsed_secs = start_time.elapsed().as_secs() as u32;
+        if current_elapsed_secs > last_elapsed_secs {
+            reporter(FeatureExtractionEvent::PhaseElapsed {
+                phase: FeatureExtractionPhase::PitchContour,
+                elapsed_secs: current_elapsed_secs,
+            });
+            last_elapsed_secs = current_elapsed_secs;
+        }
+    }
+    filled
 }
 
 fn ensure_sample_rate(clip: &RecordedClip) -> Result<Vec<f32>> {
@@ -151,31 +294,6 @@ fn median_pitch(pitches: &[f64], voiced: &[bool]) -> Option<f64> {
     } else {
         values[mid]
     })
-}
-
-fn fill_missing(values: &[Option<f32>]) -> Vec<f32> {
-    let mut filled = forward_fill(values);
-    backward_fill(&mut filled);
-    filled.iter_mut().for_each(|v| {
-        if v.is_nan() {
-            *v = 0.0;
-        }
-    });
-    filled
-}
-
-fn forward_fill(values: &[Option<f32>]) -> Vec<f32> {
-    let mut filled = vec![f32::NAN; values.len()];
-    let mut last = None;
-    for (idx, value) in values.iter().enumerate() {
-        if let Some(v) = value {
-            filled[idx] = *v;
-            last = Some(*v);
-        } else if let Some(prev) = last {
-            filled[idx] = prev;
-        }
-    }
-    filled
 }
 
 fn backward_fill(values: &mut [f32]) {

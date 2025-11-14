@@ -14,14 +14,46 @@ fn wait_for_snapshot(
     handle: &SessionHandle,
     timeout: Duration,
 ) -> Option<flowalyzer::pronunciation::SessionSnapshot> {
+    wait_for_snapshot_matching(handle, timeout, |_| true)
+}
+
+fn wait_for_snapshot_matching<F>(
+    handle: &SessionHandle,
+    timeout: Duration,
+    predicate: F,
+) -> Option<flowalyzer::pronunciation::SessionSnapshot>
+where
+    F: Fn(&flowalyzer::pronunciation::SessionSnapshot) -> bool,
+{
     let start = Instant::now();
     while start.elapsed() < timeout {
         if let Some(snapshot) = handle.try_recv() {
-            return Some(snapshot);
+            if snapshot.initializing {
+                continue;
+            }
+            if predicate(&snapshot) {
+                return Some(snapshot);
+            }
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    handle.try_recv()
+    while let Some(snapshot) = handle.try_recv() {
+        if snapshot.initializing {
+            continue;
+        }
+        if predicate(&snapshot) {
+            return Some(snapshot);
+        }
+    }
+    None
+}
+
+fn wait_for_engine_ready(handle: &SessionHandle) {
+    let snapshot = wait_for_snapshot(handle, Duration::from_secs(10));
+    assert!(
+        snapshot.is_some(),
+        "engine should emit a ready snapshot within timeout"
+    );
 }
 
 fn sine_wave(frequency: f32, duration_secs: f32) -> Vec<f32> {
@@ -87,6 +119,7 @@ fn test_basic_recipe_application() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe = create_test_recipe();
     controller.apply_recipe(0.0, 0.5, recipe)?;
@@ -104,11 +137,12 @@ fn test_invalid_range_error() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe = create_test_recipe();
     controller.apply_recipe(0.5, 0.0, recipe)?;
 
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_snapshot(&handle, Duration::from_secs(5));
     assert!(snapshot.is_some(), "should receive snapshot after command");
     let snapshot = snapshot.unwrap();
     assert!(
@@ -150,6 +184,7 @@ fn test_multiple_applications() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe1 = Recipe::new("first recipe").add_step(RecipeStep {
         repeat_count: 2,

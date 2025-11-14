@@ -12,14 +12,56 @@ fn wait_for_snapshot(
     handle: &SessionHandle,
     timeout: Duration,
 ) -> Option<flowalyzer::pronunciation::SessionSnapshot> {
+    wait_for_snapshot_matching(handle, timeout, |_| true)
+}
+
+fn wait_for_snapshot_matching<F>(
+    handle: &SessionHandle,
+    timeout: Duration,
+    predicate: F,
+) -> Option<flowalyzer::pronunciation::SessionSnapshot>
+where
+    F: Fn(&flowalyzer::pronunciation::SessionSnapshot) -> bool,
+{
     let start = Instant::now();
     while start.elapsed() < timeout {
         if let Some(snapshot) = handle.try_recv() {
-            return Some(snapshot);
+            if snapshot.initializing {
+                continue;
+            }
+            if predicate(&snapshot) {
+                return Some(snapshot);
+            }
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    handle.try_recv()
+    while let Some(snapshot) = handle.try_recv() {
+        if snapshot.initializing {
+            continue;
+        }
+        if predicate(&snapshot) {
+            return Some(snapshot);
+        }
+    }
+    None
+}
+
+fn wait_for_variant(
+    handle: &SessionHandle,
+    timeout: Duration,
+    variant: ClipVariant,
+) -> Option<flowalyzer::pronunciation::SessionSnapshot> {
+    wait_for_snapshot_matching(handle, timeout, |snapshot| {
+        snapshot.active_clip_variant == variant || snapshot.error.is_some()
+    })
+}
+
+fn wait_for_engine_ready(handle: &SessionHandle) {
+    let snapshot = wait_for_snapshot(handle, Duration::from_secs(10));
+    assert!(
+        snapshot.is_some(),
+        "engine should emit a ready snapshot within timeout"
+    );
 }
 
 fn sine_wave(frequency: f32, duration_secs: f32) -> Vec<f32> {
@@ -85,10 +127,11 @@ fn test_toggle_original_to_flowalyzed() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe = create_test_recipe();
     controller.apply_recipe(0.0, 0.5, recipe)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_secs(2));
+    let snapshot = wait_for_variant(&handle, Duration::from_secs(5), ClipVariant::Flowalyzed);
     assert!(
         snapshot.is_some(),
         "should receive snapshot after recipe application"
@@ -105,7 +148,7 @@ fn test_toggle_original_to_flowalyzed() -> Result<()> {
     );
 
     controller.toggle_clip_variant(ClipVariant::Original)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_variant(&handle, Duration::from_millis(500), ClipVariant::Original);
     assert!(snapshot.is_some(), "should receive snapshot after toggle");
     let snapshot = snapshot.unwrap();
     assert!(snapshot.error.is_none(), "toggle should succeed");
@@ -123,10 +166,11 @@ fn test_toggle_flowalyzed_to_original() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe = create_test_recipe();
     controller.apply_recipe(0.0, 0.5, recipe)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_secs(2));
+    let snapshot = wait_for_variant(&handle, Duration::from_secs(5), ClipVariant::Flowalyzed);
     assert!(
         snapshot.is_some(),
         "should receive snapshot after recipe application"
@@ -139,7 +183,7 @@ fn test_toggle_flowalyzed_to_original() -> Result<()> {
     );
 
     controller.toggle_clip_variant(ClipVariant::Original)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_variant(&handle, Duration::from_millis(500), ClipVariant::Original);
     assert!(
         snapshot.is_some(),
         "should receive snapshot after toggle to Original"
@@ -156,7 +200,7 @@ fn test_toggle_flowalyzed_to_original() -> Result<()> {
     );
 
     controller.toggle_clip_variant(ClipVariant::Flowalyzed)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_variant(&handle, Duration::from_secs(5), ClipVariant::Flowalyzed);
     assert!(
         snapshot.is_some(),
         "should receive snapshot after toggle back to Flowalyzed"
@@ -180,9 +224,10 @@ fn test_toggle_to_flowalyzed_when_none_exists() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     controller.toggle_clip_variant(ClipVariant::Flowalyzed)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_variant(&handle, Duration::from_millis(500), ClipVariant::Flowalyzed);
     assert!(
         snapshot.is_some(),
         "should receive snapshot after toggle attempt"
@@ -211,6 +256,7 @@ fn test_cache_reuse_on_toggle() -> Result<()> {
     let (runtime, _temp_dir) = create_session_runtime()?;
     let handle = runtime.into_handle();
     let controller = handle.controller();
+    wait_for_engine_ready(&handle);
 
     let recipe1 = Recipe::new("first recipe").add_step(RecipeStep {
         repeat_count: 2,
@@ -218,7 +264,7 @@ fn test_cache_reuse_on_toggle() -> Result<()> {
         silent: false,
     });
     controller.apply_recipe(0.0, 0.3, recipe1)?;
-    let snapshot1 = wait_for_snapshot(&handle, Duration::from_secs(5));
+    let snapshot1 = wait_for_variant(&handle, Duration::from_secs(5), ClipVariant::Flowalyzed);
     assert!(
         snapshot1.is_some(),
         "should receive snapshot after first recipe"
@@ -232,7 +278,7 @@ fn test_cache_reuse_on_toggle() -> Result<()> {
     let _ = wait_for_snapshot(&handle, Duration::from_millis(500));
 
     controller.toggle_clip_variant(ClipVariant::Flowalyzed)?;
-    let snapshot2 = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot2 = wait_for_variant(&handle, Duration::from_millis(500), ClipVariant::Flowalyzed);
     assert!(
         snapshot2.is_some(),
         "should receive snapshot after toggle back"
@@ -257,10 +303,11 @@ fn test_snapshot_active_variant_field() -> Result<()> {
         ClipVariant::Original,
         "initial snapshot should have Original variant"
     );
+    wait_for_engine_ready(&handle);
 
     let recipe = create_test_recipe();
     controller.apply_recipe(0.0, 0.5, recipe)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_secs(2));
+    let snapshot = wait_for_variant(&handle, Duration::from_secs(5), ClipVariant::Flowalyzed);
     assert!(snapshot.is_some(), "should receive snapshot after recipe");
     let snapshot = snapshot.unwrap();
     assert_eq!(
@@ -270,7 +317,7 @@ fn test_snapshot_active_variant_field() -> Result<()> {
     );
 
     controller.toggle_clip_variant(ClipVariant::Original)?;
-    let snapshot = wait_for_snapshot(&handle, Duration::from_millis(500));
+    let snapshot = wait_for_variant(&handle, Duration::from_millis(500), ClipVariant::Original);
     assert!(snapshot.is_some(), "should receive snapshot after toggle");
     let snapshot = snapshot.unwrap();
     assert_eq!(

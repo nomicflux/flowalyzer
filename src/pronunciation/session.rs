@@ -14,7 +14,7 @@ use crate::types::Recipe;
 use tracing::{debug, error, info};
 
 use super::alignment::AudioAligner;
-use super::features::FeatureExtractor;
+use super::features::{FeatureExtractionEvent, FeatureExtractionPhase, FeatureExtractor};
 use super::metrics::MetricCalculator;
 use super::validate_config;
 use super::{
@@ -49,6 +49,95 @@ pub struct SessionHandle {
     pending: RefCell<VecDeque<SessionSnapshot>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitializationStage {
+    LoadingReference,
+    ExtractingReferenceFeatures,
+    ComputingAlignment,
+    Finalizing,
+}
+
+impl InitializationStage {
+    pub fn label(&self) -> &'static str {
+        match self {
+            InitializationStage::LoadingReference => "Loading reference audio",
+            InitializationStage::ExtractingReferenceFeatures => {
+                "Extracting reference features (mel + pitch)"
+            }
+            InitializationStage::ComputingAlignment => "Computing initial alignment",
+            InitializationStage::Finalizing => "Finalizing session state",
+        }
+    }
+
+    pub fn order(&self) -> usize {
+        match self {
+            InitializationStage::LoadingReference => 0,
+            InitializationStage::ExtractingReferenceFeatures => 1,
+            InitializationStage::ComputingAlignment => 2,
+            InitializationStage::Finalizing => 3,
+        }
+    }
+
+    pub fn ordered() -> &'static [InitializationStage; 4] {
+        &[
+            InitializationStage::LoadingReference,
+            InitializationStage::ExtractingReferenceFeatures,
+            InitializationStage::ComputingAlignment,
+            InitializationStage::Finalizing,
+        ]
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InitializationProgress {
+    pub stage: InitializationStage,
+    pub completed_steps: u32,
+    pub total_steps: u32,
+    pub sub_stage_index: u32,
+    pub sub_stage_total: u32,
+    pub sub_stage_label: Option<String>,
+    pub metric_label: Option<String>,
+    pub current_value: Option<u32>,
+    pub total_value: Option<u32>,
+    pub elapsed_secs: Option<u32>,
+}
+
+impl InitializationProgress {
+    fn new(stage: InitializationStage) -> Self {
+        Self {
+            stage,
+            completed_steps: stage.order() as u32,
+            total_steps: InitializationStage::ordered().len() as u32,
+            sub_stage_index: 0,
+            sub_stage_total: 0,
+            sub_stage_label: None,
+            metric_label: None,
+            current_value: None,
+            total_value: None,
+            elapsed_secs: None,
+        }
+    }
+
+    fn with_sub_stage<S: Into<String>>(mut self, index: u32, total: u32, label: S) -> Self {
+        self.sub_stage_index = index;
+        self.sub_stage_total = total;
+        self.sub_stage_label = Some(label.into());
+        self
+    }
+
+    fn with_metric<S: Into<String>>(mut self, label: S, current: u32, total: u32) -> Self {
+        self.metric_label = Some(label.into());
+        self.current_value = Some(current);
+        self.total_value = Some(total);
+        self
+    }
+
+    fn with_elapsed(mut self, elapsed_secs: u32) -> Self {
+        self.elapsed_secs = Some(elapsed_secs);
+        self
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionSnapshot {
     pub alignment: AlignmentReport,
@@ -58,6 +147,7 @@ pub struct SessionSnapshot {
     pub latency_ms: f32,
     pub error: Option<String>,
     pub initializing: bool,
+    pub init_progress: Option<InitializationProgress>,
     pub active_clip_variant: ClipVariant,
 }
 
@@ -71,6 +161,7 @@ impl Default for SessionSnapshot {
             latency_ms: 0.0,
             error: None,
             initializing: true,
+            init_progress: None,
             active_clip_variant: ClipVariant::Original,
         }
     }
@@ -93,7 +184,8 @@ impl SessionRuntime {
                 info!("runtime thread started; sending initializing snapshot");
                 let initializing_snapshot = SessionSnapshot::default();
                 let _ = update_tx.send(initializing_snapshot);
-                match EngineRunner::build(thread_config) {
+                let emitter = InitializationEmitter::new(&update_tx);
+                match EngineRunner::build(thread_config, &emitter) {
                     Ok(runner) => runner.run(command_rx, update_tx),
                     Err(err) => {
                         error!(error = %err, "failed to construct session engine");
@@ -107,27 +199,21 @@ impl SessionRuntime {
                 error!(error = %err, "failed to spawn session runtime thread");
                 PronunciationError::new(err.to_string())
             })?;
-        info!("session runtime thread spawned; waiting for complete snapshot");
+        info!("session runtime thread spawned; awaiting first snapshot");
         let timeout = Duration::from_secs(60);
-        let start = Instant::now();
-        let initial = loop {
-            if start.elapsed() > timeout {
-                error!("timeout waiting for complete snapshot from runtime thread");
-                break SessionSnapshot::default()
-                    .with_error_message("timeout waiting for engine initialization".to_string());
+        let initial = match update_rx.recv_timeout(timeout) {
+            Ok(snapshot) => {
+                if snapshot.initializing {
+                    info!("received initializing snapshot; returning control to UI");
+                } else {
+                    info!("received complete snapshot from runtime thread");
+                }
+                snapshot
             }
-            match update_rx.recv_timeout(Duration::from_secs(1)) {
-                Ok(snapshot) => {
-                    if !snapshot.initializing {
-                        info!("received complete snapshot from runtime thread");
-                        break snapshot;
-                    } else {
-                        info!("received initializing snapshot; waiting for complete snapshot");
-                    }
-                }
-                Err(_) => {
-                    continue;
-                }
+            Err(_) => {
+                error!("timeout waiting for first snapshot from runtime thread");
+                SessionSnapshot::default()
+                    .with_error_message("timeout waiting for engine initialization".to_string())
             }
         };
         Ok(Self {
@@ -280,7 +366,90 @@ impl SessionSnapshot {
 
     pub fn with_initializing(mut self, initializing: bool) -> Self {
         self.initializing = initializing;
+        if !initializing {
+            self.init_progress = None;
+        }
         self
+    }
+
+    pub fn with_progress(mut self, progress: InitializationProgress) -> Self {
+        self.initializing = true;
+        self.init_progress = Some(progress);
+        self
+    }
+}
+
+struct InitializationEmitter {
+    tx: Sender<SessionSnapshot>,
+}
+
+impl InitializationEmitter {
+    fn new(tx: &Sender<SessionSnapshot>) -> Self {
+        Self { tx: tx.clone() }
+    }
+
+    fn stage(&self, stage: InitializationStage) {
+        let progress = InitializationProgress::new(stage);
+        self.send(progress);
+    }
+
+    fn stage_detail<S: Into<String>>(
+        &self,
+        stage: InitializationStage,
+        index: u32,
+        total: u32,
+        label: S,
+    ) {
+        let progress = InitializationProgress::new(stage).with_sub_stage(index, total, label);
+        self.send(progress);
+    }
+
+    fn handle_feature_event(&self, event: FeatureExtractionEvent) {
+        match event {
+            FeatureExtractionEvent::PhaseStart(phase) => {
+                self.stage_detail(
+                    InitializationStage::ExtractingReferenceFeatures,
+                    phase.order() as u32,
+                    FeatureExtractionPhase::total() as u32,
+                    phase.label(),
+                );
+            }
+            FeatureExtractionEvent::PhaseProgress {
+                phase,
+                label,
+                current,
+                total,
+            } => {
+                let progress =
+                    InitializationProgress::new(InitializationStage::ExtractingReferenceFeatures)
+                        .with_sub_stage(
+                            phase.order() as u32,
+                            FeatureExtractionPhase::total() as u32,
+                            phase.label(),
+                        )
+                        .with_metric(label, current, total);
+                self.send(progress);
+            }
+            FeatureExtractionEvent::PhaseElapsed {
+                phase,
+                elapsed_secs,
+            } => {
+                let progress =
+                    InitializationProgress::new(InitializationStage::ExtractingReferenceFeatures)
+                        .with_sub_stage(
+                            phase.order() as u32,
+                            FeatureExtractionPhase::total() as u32,
+                            phase.label(),
+                        )
+                        .with_elapsed(elapsed_secs);
+                self.send(progress);
+            }
+        }
+    }
+
+    fn send(&self, progress: InitializationProgress) {
+        let snapshot = SessionSnapshot::default().with_progress(progress);
+        let _ = self.tx.send(snapshot);
     }
 }
 
@@ -341,6 +510,7 @@ pub mod engine {
     };
     use crate::audio::capture::{CaptureConfig, LiveCapture};
     use crate::audio::resample;
+    use crate::pronunciation::features::FeatureExtractionEvent;
     use crate::pronunciation::AlignmentWeights;
     use std::collections::{HashMap, VecDeque};
     use std::time::{Duration, Instant};
@@ -377,6 +547,24 @@ pub mod engine {
             capture: C,
             defer_feature_extraction: bool,
         ) -> Result<Self> {
+            Self::new_with_progress(
+                reference,
+                alignment,
+                latency_budget_ms,
+                capture,
+                defer_feature_extraction,
+                None,
+            )
+        }
+
+        pub fn new_with_progress(
+            reference: RecordedClip,
+            alignment: AlignmentWeights,
+            latency_budget_ms: u32,
+            capture: C,
+            defer_feature_extraction: bool,
+            feature_progress: Option<&dyn Fn(FeatureExtractionEvent)>,
+        ) -> Result<Self> {
             let extractor = FeatureExtractor::new();
             let aligner = AudioAligner::new(alignment);
             let mut reference_features_cache = HashMap::new();
@@ -389,15 +577,33 @@ pub mod engine {
                     "starting feature extraction for reference audio"
                 );
                 let start = Instant::now();
-                let reference_features = extractor.extract(&reference).map_err(|err| {
-                    let elapsed = start.elapsed();
-                    error!(
-                        elapsed_secs = elapsed.as_secs_f64(),
-                        error = %err,
-                        "feature extraction failed"
-                    );
-                    err
-                })?;
+                let reference_features = match feature_progress {
+                    Some(reporter) => {
+                        let mut event_reporter = |event: FeatureExtractionEvent| {
+                            reporter(event);
+                        };
+                        extractor
+                            .extract_with_progress(&reference, &mut event_reporter)
+                            .map_err(|err| {
+                                let elapsed = start.elapsed();
+                                error!(
+                                    elapsed_secs = elapsed.as_secs_f64(),
+                                    error = %err,
+                                    "feature extraction failed"
+                                );
+                                err
+                            })?
+                    }
+                    None => extractor.extract(&reference).map_err(|err| {
+                        let elapsed = start.elapsed();
+                        error!(
+                            elapsed_secs = elapsed.as_secs_f64(),
+                            error = %err,
+                            "feature extraction failed"
+                        );
+                        err
+                    })?,
+                };
                 let elapsed = start.elapsed();
                 info!(
                     elapsed_secs = elapsed.as_secs_f64(),
@@ -742,11 +948,12 @@ struct EngineRunner {
 }
 
 impl EngineRunner {
-    fn build(config: SessionConfig) -> Result<Self> {
+    fn build(config: SessionConfig, progress: &InitializationEmitter) -> Result<Self> {
         info!(
             path = %config.reference_wav.display(),
             "loading reference WAV file"
         );
+        progress.stage(InitializationStage::LoadingReference);
         let original_reference = load_clip(&config.reference_wav)?;
         info!(
             duration_secs = original_reference.duration.as_secs_f64(),
@@ -762,13 +969,18 @@ impl EngineRunner {
         );
         let capture = engine::LiveCaptureSource::new(&config.capture);
         info!("creating session engine (this will extract features from reference)");
+        progress.stage(InitializationStage::ExtractingReferenceFeatures);
+        let feature_progress = |event: FeatureExtractionEvent| {
+            progress.handle_feature_event(event);
+        };
         let build_start = Instant::now();
-        let mut engine = engine::SessionEngine::new(
+        let mut engine = engine::SessionEngine::new_with_progress(
             original_reference.clone(),
             config.alignment,
             config.latency_budget_ms,
             capture,
             false, // Don't defer in production
+            Some(&feature_progress),
         )
         .map_err(|err| {
             let elapsed = build_start.elapsed();
@@ -785,6 +997,7 @@ impl EngineRunner {
             "session engine created successfully"
         );
         info!("computing initial reference alignment");
+        progress.stage(InitializationStage::ComputingAlignment);
         let alignment_start = Instant::now();
         let initial_alignment = engine.reference_alignment(ClipVariant::Original)?;
         let alignment_elapsed = alignment_start.elapsed();
@@ -793,6 +1006,7 @@ impl EngineRunner {
             phonemes = initial_alignment.phonemes.len(),
             "initial reference alignment computed"
         );
+        progress.stage(InitializationStage::Finalizing);
         let mut initial_snapshot = SessionSnapshot::default()
             .with_alignment(initial_alignment, PronunciationScores::default())
             .with_initializing(false);

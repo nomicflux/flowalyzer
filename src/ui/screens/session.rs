@@ -3,8 +3,8 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::pronunciation::{
-    AlignedPhoneme, AlignmentReport, ClipVariant, Result as SessionResult, SessionController,
-    SessionHandle, SessionSnapshot,
+    AlignedPhoneme, AlignmentReport, ClipVariant, InitializationStage, Result as SessionResult,
+    SessionController, SessionHandle, SessionSnapshot,
 };
 use crate::types::{Recipe, RuntimeRecipe};
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
@@ -152,10 +152,7 @@ impl SessionApp {
                 self.show_scores(ui);
             });
             if self.snapshot.initializing {
-                ui.colored_label(
-                    egui::Color32::from_rgb(210, 160, 20),
-                    "Initializing engine... Please wait.",
-                );
+                self.show_initialization_progress(ui);
             } else {
                 ui.label("Shortcuts: Space toggles recording · R replays the reference clip.");
                 ui.label(self.playback_status());
@@ -227,6 +224,58 @@ impl SessionApp {
                     );
                 }
             }
+        }
+    }
+
+    fn show_initialization_progress(&self, ui: &mut egui::Ui) {
+        if let Some(progress) = &self.snapshot.init_progress {
+            let stage_number = progress.stage.order() + 1;
+            ui.colored_label(
+                egui::Color32::from_rgb(210, 160, 20),
+                format!(
+                    "Initializing engine… Stage {}/{}: {}",
+                    stage_number,
+                    progress.total_steps,
+                    progress.stage.label()
+                ),
+            );
+            ui.add_space(4.0);
+            for stage in InitializationStage::ordered().iter() {
+                let marker = if stage.order() < progress.completed_steps as usize {
+                    "✓"
+                } else if *stage == progress.stage {
+                    "…"
+                } else {
+                    "•"
+                };
+                ui.label(format!("{} {}", marker, stage.label()));
+            }
+            if progress.sub_stage_total > 0 {
+                let current = progress
+                    .sub_stage_index
+                    .max(1)
+                    .min(progress.sub_stage_total)
+                    .max(1);
+                if let Some(label) = &progress.sub_stage_label {
+                    ui.label(format!(
+                        "    ↳ {} (step {}/{})",
+                        label, current, progress.sub_stage_total
+                    ));
+                }
+            }
+            if let (Some(label), Some(curr)) = (&progress.metric_label, progress.current_value) {
+                if let Some(total) = progress.total_value {
+                    ui.label(format!("    ↳ {} {} / {}", label, curr, total));
+                }
+                if let Some(secs) = progress.elapsed_secs {
+                    ui.label(format!("       {}s elapsed", secs));
+                }
+            }
+        } else {
+            ui.colored_label(
+                egui::Color32::from_rgb(210, 160, 20),
+                "Initializing engine... Please wait.",
+            );
         }
     }
 

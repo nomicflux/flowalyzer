@@ -204,6 +204,13 @@
 - **Resolution:** Extend dev profile overrides to every crate in the pYIN stack so the entire feature-extraction pipeline uses release-grade optimizations in dev mode. This restores “seconds, not minutes” startup while preserving existing architecture (no chunking changes, no buffer trimming).
 - **Verification:** After updating `Cargo.toml`, run `cargo clean -p aus -p pyin -p realfft -p ndarray -p ndarray-stats -p statrs` followed by `cargo test --all`, confirming startup latency returns to historical levels.
 
+### UI Blocked on Feature Extraction *(2025-11-14)*
+
+- **What Happened (User quote 2025-11-14):** “Can we get the UI loading right away, and rely on the ‘Loading’ messages in panels until features finish extracting?” The UI thread waits for a snapshot with `initializing = false`, so it cannot render until reference feature extraction completes.
+- **Root Cause:** `SessionRuntime::new()` blocks on a “complete” snapshot (alignment populated) instead of handing the initial “initializing” snapshot to the UI. Even after optimizing pYIN, the UI still cannot appear until feature extraction finishes.
+- **Resolution:** Let `SessionRuntime::new()` return immediately after the first “initializing” snapshot, emit progress snapshots for each initialization stage (loading audio, extracting features, computing alignment, finalizing), and render those stats in the UI (“Initializing engine… Stage N of M”) so users see both what is blocking and what is already complete.
+- **Verification:** After updating the runtime initialization logic, run `cargo test --all`, then start the pronunciation binary with a long clip to confirm the UI window appears immediately with loading banners while reference extraction completes in the background.
+
 ## Phase Status Overview
 | Phase | Scope | Status | Notes |
 | --- | --- | --- | --- |
@@ -539,7 +546,33 @@
   - Added "Flowalyzer Recipe Workflow" section to PROGRAM_FLOW.md explaining data flow and backend integration
   - All tests pass, clippy clean, code formatted
 
-### Phase 5.3 – Regression Sweep & Wrap-up
+### Phase 5.3 – Fine-Grained Initialization Progress Stats
+
+**Status: COMPLETE** *(2025-11-14)*
+
+**Implementation Summary:**
+- Extended `FeatureExtractionEvent` enum with `PhaseProgress` variant for detailed progress reporting
+- Created `extract_pitch_contour_with_reporting()` function that chunks work and reports progress every 256 frames
+- Updated `SessionEngine::new_with_progress()` to accept `FeatureExtractionEvent` callbacks
+- Added throttling to `InitializationEmitter` (1-second minimum between emissions)
+- Spawned a dedicated pYIN worker thread with a 1 Hz heartbeat so the UI receives continuous updates during long pitch extraction
+- Extended `InitializationProgress` struct with `metric_label`, `current_value`, `total_value`, and `elapsed_secs` fields
+- Updated UI `show_initialization_progress()` to display fine-grained metrics (current/total counts and elapsed time)
+- Removed dead code (old `extract_pitch_contour`, `fill_missing`, `forward_fill` functions)
+
+**Deliverables:**
+- Runtime publishes progress events at ≤1 Hz with detailed metrics
+- UI displays changing stats at least once/second during feature extraction
+- Tests pass (100% success)
+- Zero clippy warnings
+
+**Files Modified:**
+- `src/pronunciation/features/mod.rs`: Extended `FeatureExtractionEvent`, updated `extract_with_progress()` to emit elapsed events
+- `src/pronunciation/features/contour.rs`: Created `extract_pitch_contour_with_reporting()` with chunked progress reporting
+- `src/pronunciation/session.rs`: Updated `InitializationEmitter` with throttling, added `handle_feature_event()`, extended `InitializationProgress` struct
+- `src/ui/screens/session.rs`: Updated `show_initialization_progress()` to display metric fields
+
+### Phase 5.4 – Regression Sweep & Wrap-up
 - Run targeted regression tests ensuring pronunciation session works without Flowalyzer enhancements enabled.
 - Finalize planning doc with completion notes, residual risks, and any deferred follow-ups.
 - Files: regression test suites, this planning doc.
