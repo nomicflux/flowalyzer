@@ -36,3 +36,15 @@ opt-level = 3
 
 [profile.dev.package.pyin]
 opt-level = 3
+
+[profile.dev.package.realfft]
+opt-level = 3
+
+[profile.dev.package.ndarray]
+opt-level = 3
+
+[profile.dev.package.ndarray-stats]
+opt-level = 3
+
+[profile.dev.package.statrs]
+opt-level = 3

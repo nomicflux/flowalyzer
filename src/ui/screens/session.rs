@@ -6,7 +6,7 @@ use crate::pronunciation::{
     AlignedPhoneme, AlignmentReport, ClipVariant, Result as SessionResult, SessionController,
     SessionHandle, SessionSnapshot,
 };
-use crate::types::RuntimeRecipe;
+use crate::types::{Recipe, RuntimeRecipe};
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
 use crate::ui::components::phoneme_timeline::PhonemeTimeline;
 use crate::ui::components::pitch::PitchView;
@@ -20,6 +20,7 @@ use crate::ui::components::waveform::WaveformView;
 const FRAME_WINDOW: usize = 400;
 const SPECTROGRAM_COLS: usize = 64;
 const FRAME_HOP_MS: f32 = 10.0;
+const RECIPE_SUCCESS_DISPLAY_SECS: u64 = 3;
 
 /// Session state lifecycle:
 /// - State fields (range_selection, recipe_builder_state, staged_recipe) initialize to None
@@ -27,6 +28,11 @@ const FRAME_HOP_MS: f32 = 10.0;
 /// - User builds recipe and clicks Apply → staged_recipe populated
 /// - User clicks Clear OR range_selection cleared → all three fields reset to None
 /// - App restart (SessionApp::new()) → all state reinitializes to None
+enum RecipeStatus {
+    Applying,
+    Success { shown_at: std::time::Instant },
+}
+
 pub struct SessionApp {
     handle: SessionHandle,
     controller: SessionController,
@@ -43,6 +49,8 @@ pub struct SessionApp {
     selection_error: Option<SelectionError>,
     recipe_builder_state: Option<RecipeBuilderState>,
     staged_recipe: Option<RuntimeRecipe>,
+    recipe_status: Option<RecipeStatus>,
+    previous_clip_variant: ClipVariant,
 }
 
 impl SessionApp {
@@ -50,6 +58,7 @@ impl SessionApp {
         let latency_budget_ms = handle.config().latency_budget_ms;
         let controller = handle.controller();
         let snapshot = handle.initial_snapshot();
+        let previous_clip_variant = snapshot.active_clip_variant;
         let mut app = Self {
             handle,
             controller,
@@ -66,6 +75,8 @@ impl SessionApp {
             selection_error: None,
             recipe_builder_state: None,
             staged_recipe: None,
+            recipe_status: None,
+            previous_clip_variant,
         };
         app.sync_visuals();
         app
@@ -98,9 +109,24 @@ impl SessionApp {
     fn poll_updates(&mut self, ctx: &egui::Context) {
         let mut changed = false;
         for update in self.handle.drain_snapshots() {
+            let new_variant = update.active_clip_variant;
+            if new_variant == ClipVariant::Flowalyzed
+                && self.previous_clip_variant == ClipVariant::Original
+                && matches!(self.recipe_status, Some(RecipeStatus::Applying))
+            {
+                self.recipe_status = Some(RecipeStatus::Success {
+                    shown_at: std::time::Instant::now(),
+                });
+            }
+            self.previous_clip_variant = new_variant;
             self.snapshot = update;
             self.sync_visuals();
             changed = true;
+        }
+        if let Some(RecipeStatus::Success { shown_at }) = self.recipe_status {
+            if shown_at.elapsed().as_secs() >= RECIPE_SUCCESS_DISPLAY_SECS {
+                self.recipe_status = None;
+            }
         }
         if changed {
             ctx.request_repaint();
@@ -142,6 +168,7 @@ impl SessionApp {
             self.show_selection_info(ui);
             self.show_recipe_summary(ui);
             self.show_clip_metadata(ui);
+            self.show_recipe_status(ui);
         });
     }
 
@@ -174,11 +201,32 @@ impl SessionApp {
     }
 
     fn show_clip_metadata(&self, ui: &mut egui::Ui) {
-        if self.snapshot.active_clip_variant == ClipVariant::Flowalyzed {
-            ui.colored_label(
-                egui::Color32::from_rgb(100, 150, 255),
+        let (message, color) = match self.snapshot.active_clip_variant {
+            ClipVariant::Original => (
+                "Original clip is active",
+                egui::Color32::from_rgb(180, 180, 180),
+            ),
+            ClipVariant::Flowalyzed => (
                 "Flowalyzed clip is active",
-            );
+                egui::Color32::from_rgb(100, 150, 255),
+            ),
+        };
+        ui.colored_label(color, message);
+    }
+
+    fn show_recipe_status(&self, ui: &mut egui::Ui) {
+        if let Some(status) = &self.recipe_status {
+            match status {
+                RecipeStatus::Applying => {
+                    ui.colored_label(egui::Color32::from_rgb(210, 160, 20), "Applying recipe...");
+                }
+                RecipeStatus::Success { .. } => {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(30, 180, 80),
+                        "Recipe applied successfully",
+                    );
+                }
+            }
         }
     }
 
@@ -207,7 +255,7 @@ impl SessionApp {
         }
         if let Some(variant) = actions.toggle_to_variant {
             if let Err(err) = self.controller.toggle_clip_variant(variant) {
-                self.control_error = Some(err.to_string());
+                self.control_error = Some(format!("Toggle error: {}", err));
             }
         }
     }
@@ -382,9 +430,28 @@ impl SessionApp {
     }
 
     fn apply_recipe(&mut self) {
-        if let Some(state) = &self.recipe_builder_state {
-            self.staged_recipe = Some(state.to_runtime_recipe());
+        let (recipe, range) = match self.extract_recipe_and_range() {
+            Some(pair) => pair,
+            None => return,
+        };
+        if let Err(err) = self
+            .controller
+            .apply_recipe(range.start_sec, range.end_sec, recipe)
+        {
+            self.control_error = Some(format!("Recipe error: {}", err));
+        } else {
+            self.recipe_status = Some(RecipeStatus::Applying);
+            self.clear_recipe_builder();
         }
+    }
+
+    fn extract_recipe_and_range(&self) -> Option<(Recipe, RangeSelection)> {
+        let staged = self.staged_recipe.as_ref()?;
+        let range = self.range_selection?;
+        if staged.validate().is_err() {
+            return None;
+        }
+        Some((staged.to_recipe(), range))
     }
 
     fn clear_recipe_builder(&mut self) {
@@ -604,12 +671,11 @@ mod tests {
 
     #[test]
     fn test_update_recipe_builder_visibility_shows_builder() {
-        let mut selection = Some(RangeSelection {
+        let selection = Some(RangeSelection {
             start_sec: 0.0,
             end_sec: 10.0,
         });
         let mut builder_state: Option<RecipeBuilderState> = None;
-        let mut staged_recipe: Option<RuntimeRecipe> = None;
 
         match selection {
             Some(_) if builder_state.is_none() => {
@@ -617,7 +683,6 @@ mod tests {
             }
             None => {
                 builder_state = None;
-                staged_recipe = None;
             }
             _ => {}
         }
@@ -627,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_update_recipe_builder_visibility_clears_on_none() {
-        let mut selection: Option<RangeSelection> = None;
+        let selection: Option<RangeSelection> = None;
         let mut builder_state = Some(RecipeBuilderState::new());
         let mut staged_recipe = Some(RuntimeRecipe {
             name: Some("Test".to_string()),
@@ -651,22 +716,139 @@ mod tests {
 
     #[test]
     fn test_clear_recipe_builder_clears_all_fields() {
-        let mut selection = Some(RangeSelection {
+        let _selection = Some(RangeSelection {
             start_sec: 0.0,
             end_sec: 10.0,
         });
-        let mut builder_state = Some(RecipeBuilderState::new());
-        let mut staged_recipe = Some(RuntimeRecipe {
+        let _builder_state = Some(RecipeBuilderState::new());
+        let _staged_recipe = Some(RuntimeRecipe {
             name: Some("Test".to_string()),
             steps: vec![],
         });
 
-        selection = None;
-        builder_state = None;
-        staged_recipe = None;
+        let selection: Option<RangeSelection> = None;
+        let builder_state: Option<RecipeBuilderState> = None;
+        let staged_recipe: Option<RuntimeRecipe> = None;
 
         assert!(selection.is_none());
         assert!(builder_state.is_none());
         assert!(staged_recipe.is_none());
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_valid() {
+        let staged_recipe = Some(RuntimeRecipe {
+            name: Some("Test".to_string()),
+            steps: vec![RuntimeRecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.0,
+                silent: false,
+            }],
+        });
+        let range_selection = Some(RangeSelection {
+            start_sec: 5.0,
+            end_sec: 10.0,
+        });
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_some());
+        let (recipe, range) = result.unwrap();
+        assert_eq!(recipe.name, "Test");
+        assert_eq!(recipe.steps.len(), 1);
+        assert_eq!(range.start_sec, 5.0);
+        assert_eq!(range.end_sec, 10.0);
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_no_recipe() {
+        let staged_recipe = None;
+        let range_selection = Some(RangeSelection {
+            start_sec: 5.0,
+            end_sec: 10.0,
+        });
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_no_selection() {
+        let staged_recipe = Some(RuntimeRecipe {
+            name: Some("Test".to_string()),
+            steps: vec![RuntimeRecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.0,
+                silent: false,
+            }],
+        });
+        let range_selection = None;
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_invalid_recipe() {
+        let staged_recipe = Some(RuntimeRecipe {
+            name: Some("Test".to_string()),
+            steps: vec![],
+        });
+        let range_selection = Some(RangeSelection {
+            start_sec: 5.0,
+            end_sec: 10.0,
+        });
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_zero_repeat_count() {
+        let staged_recipe = Some(RuntimeRecipe {
+            name: Some("Invalid".to_string()),
+            steps: vec![RuntimeRecipeStep {
+                repeat_count: 0,
+                speed_factor: 1.0,
+                silent: false,
+            }],
+        });
+        let range_selection = Some(RangeSelection {
+            start_sec: 5.0,
+            end_sec: 10.0,
+        });
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_recipe_and_range_zero_speed() {
+        let staged_recipe = Some(RuntimeRecipe {
+            name: Some("Invalid".to_string()),
+            steps: vec![RuntimeRecipeStep {
+                repeat_count: 1,
+                speed_factor: 0.0,
+                silent: false,
+            }],
+        });
+        let range_selection = Some(RangeSelection {
+            start_sec: 5.0,
+            end_sec: 10.0,
+        });
+
+        let result = extract_recipe_and_range_helper(&staged_recipe, range_selection);
+        assert!(result.is_none());
+    }
+
+    fn extract_recipe_and_range_helper(
+        staged_recipe: &Option<RuntimeRecipe>,
+        range_selection: Option<RangeSelection>,
+    ) -> Option<(Recipe, RangeSelection)> {
+        let staged = staged_recipe.as_ref()?;
+        let range = range_selection?;
+        if staged.validate().is_err() {
+            return None;
+        }
+        Some((staged.to_recipe(), range))
     }
 }

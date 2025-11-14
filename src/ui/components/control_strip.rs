@@ -78,13 +78,7 @@ fn stop_replay_button(ui: &mut egui::Ui) -> bool {
 }
 
 fn latency_badge(ui: &mut egui::Ui, latency_ms: f32, budget_ms: u32) {
-    let color = if latency_ms > budget_ms as f32 {
-        egui::Color32::from_rgb(200, 60, 60)
-    } else if latency_ms > budget_ms as f32 * 0.75 {
-        egui::Color32::from_rgb(210, 160, 20)
-    } else {
-        egui::Color32::from_rgb(30, 180, 80)
-    };
+    let color = latency_color(latency_ms, budget_ms);
     let text = format!("Latency {:.0} ms (budget {} ms)", latency_ms, budget_ms);
     ui.colored_label(color, text)
         .on_hover_text("Capture-to-feedback latency must stay within the 200 ms budget.");
@@ -125,4 +119,55 @@ fn clip_variant_toggle(
         });
     });
     result
+}
+
+fn latency_color(latency_ms: f32, budget_ms: u32) -> egui::Color32 {
+    if latency_ms > budget_ms as f32 {
+        egui::Color32::from_rgb(200, 60, 60)
+    } else if latency_ms > budget_ms as f32 * 0.75 {
+        egui::Color32::from_rgb(210, 160, 20)
+    } else {
+        egui::Color32::from_rgb(30, 180, 80)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_latency_color_green_below_threshold() {
+        let color = latency_color(50.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(30, 180, 80));
+    }
+
+    #[test]
+    fn test_latency_color_yellow_above_75_percent() {
+        let color = latency_color(151.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(210, 160, 20));
+    }
+
+    #[test]
+    fn test_latency_color_yellow_just_under_budget() {
+        let color = latency_color(199.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(210, 160, 20));
+    }
+
+    #[test]
+    fn test_latency_color_red_over_budget() {
+        let color = latency_color(201.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(200, 60, 60));
+    }
+
+    #[test]
+    fn test_latency_color_yellow_at_budget() {
+        let color = latency_color(200.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(210, 160, 20));
+    }
+
+    #[test]
+    fn test_latency_color_green_at_75_percent() {
+        let color = latency_color(150.0, 200);
+        assert_eq!(color, egui::Color32::from_rgb(30, 180, 80));
+    }
 }

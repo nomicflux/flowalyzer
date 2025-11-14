@@ -183,6 +183,18 @@ Real-time audio processing is challenging. Here's how the system stays fast:
 
 The result: on a modern CPU, the system can process audio faster than real-time. A 1-second reference typically takes 70ms to process (0.07x real-time). This leaves plenty of headroom for the 200ms latency budget.
 
+## Flowalyzed Clip Lifecycle
+
+Flowalyzed clips generated via Flowalyzer recipes are temporary and exist only while the pronunciation session is running. When you apply a recipe to a time range in the reference audio, the system creates a modified version of that audio segment in memory. This flowalyzed clip can be toggled as the active reference for pronunciation comparison. However, after closing the session, flowalyzed clips are not saved. All generated clips and their associated analyses (pronunciation features, alignment reports) are cleared from memory when the session ends. To preserve processed audio for later use, you should record or capture it during the session. This transient behavior keeps session state simple and avoids issues with stale cached data.
+
+## Flowalyzer Recipe Workflow
+
+The Flowalyzer integration allows you to apply audio transformations to selected portions of the reference clip. To use it, click and drag on the reference waveform to select a time range. This opens the recipe builder panel on the right side, where you can add steps that specify repetition counts, speed factors, and silence insertion. The recipe builder includes presets like the language learning preset, which creates a pattern of slow, normal, and fast repetitions with silence gaps.
+
+When you click Apply in the recipe builder, the UI sends an `ApplyFlowalyzerRecipe` command to the runtime thread. The `EngineRunner` receives this command and calls `apply_recipe_to_range()`, which extracts the selected audio segment, applies the recipe steps (speed changes, repetitions, silence), and assembles the result into a new `RecordedClip`. The system then extracts pronunciation features from the flowalyzed clip and caches them, invalidating any previous flowalyzed cache. A snapshot is sent back to the UI indicating the recipe was applied successfully, and the active clip variant switches to Flowalyzed.
+
+You can toggle between the Original and Flowalyzed clips using radio buttons in the control strip. When toggling, the system reuses cached features and alignment reports—no re-computation is needed. The active clip variant is displayed in the top panel, and the UI shows status messages like "Applying recipe..." during processing and "Recipe applied successfully" when complete. As mentioned in the Flowalyzed Clip Lifecycle section above, these clips are transient and do not persist between sessions.
+
 ## Conclusion: A Well-Architected System
 
 The pronunciation binary is a good example of separating concerns in a real-time system:
