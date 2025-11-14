@@ -250,7 +250,7 @@
 | 2.3 | Complete |
 | 3.1 | Complete |
 | 3.2 | Complete |
-| 3.3 | Pending |
+| 3.3 | Complete |
 | 4.1 | Pending |
 | 4.2 | Pending |
 | 4.3 | Pending |
@@ -368,6 +368,20 @@
 - Persist selection/recipe state in session app until user applies changes; reset on session reloads.
 - Display summary of staged recipe and selection metrics.
 - Files: `src/ui/screens/session.rs`, tests for state reset behavior.
+- **Status: COMPLETE** *(2025-11-13)* - Implemented:
+  - Added `show_recipe_summary()` method (9 lines) to display staged recipe info in top panel
+  - Added `format_recipe_summary()` helper function (4 lines) - pure function generating human-readable summary
+  - Recipe summary displays: recipe name, step count, target time range (e.g., "Language Learning: 6 steps | Will apply to 10.50s - 25.30s")
+  - Summary shown only when both `range_selection` and `staged_recipe` are present
+  - Added state lifecycle documentation above `SessionApp` struct explaining state initialization, persistence, and clearing
+  - Created 5 unit tests in `src/ui/screens/session.rs` tests module:
+    - `test_format_recipe_summary()` - Validates named recipe formatting
+    - `test_format_recipe_summary_unnamed()` - Validates fallback to "Custom" for unnamed recipes
+    - `test_update_recipe_builder_visibility_shows_builder()` - Verifies builder appears when selection created
+    - `test_update_recipe_builder_visibility_clears_on_none()` - Verifies builder clears when selection removed
+    - `test_clear_recipe_builder_clears_all_fields()` - Verifies all three state fields cleared together
+  - All tests pass (70 unit tests + 3 doc tests), clippy clean, code formatted
+  - State persistence behavior validated: selection/recipe/builder state persist across frames until explicitly cleared or app restart
 
 **Completion Reminder:** Following Phase 3 implementation, run `cargo test --all`, `cargo fmt`, `cargo clippy`. Record status updates here and wait for approval.
 

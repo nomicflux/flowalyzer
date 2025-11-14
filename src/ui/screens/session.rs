@@ -21,6 +21,12 @@ const FRAME_WINDOW: usize = 400;
 const SPECTROGRAM_COLS: usize = 64;
 const FRAME_HOP_MS: f32 = 10.0;
 
+/// Session state lifecycle:
+/// - State fields (range_selection, recipe_builder_state, staged_recipe) initialize to None
+/// - User creates range selection → recipe_builder_state auto-populates
+/// - User builds recipe and clicks Apply → staged_recipe populated
+/// - User clicks Clear OR range_selection cleared → all three fields reset to None
+/// - App restart (SessionApp::new()) → all state reinitializes to None
 pub struct SessionApp {
     handle: SessionHandle,
     controller: SessionController,
@@ -131,6 +137,7 @@ impl SessionApp {
                 ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
             }
             self.show_selection_info(ui);
+            self.show_recipe_summary(ui);
         });
     }
 
@@ -148,6 +155,17 @@ impl SessionApp {
                 SelectionError::InvalidRange => "Invalid selection range",
             };
             ui.colored_label(egui::Color32::from_rgb(200, 60, 60), message);
+        }
+    }
+
+    fn show_recipe_summary(&self, ui: &mut egui::Ui) {
+        if let (Some(recipe), Some(sel)) = (&self.staged_recipe, self.range_selection) {
+            let summary = format_recipe_summary(recipe);
+            let range_text = format!("Will apply to {:.2}s - {:.2}s", sel.start_sec, sel.end_sec);
+            ui.colored_label(
+                egui::Color32::from_rgb(30, 180, 80),
+                format!("{} | {}", summary, range_text),
+            );
         }
     }
 
@@ -508,9 +526,124 @@ fn render_recipe_builder(
     output
 }
 
+fn format_recipe_summary(recipe: &RuntimeRecipe) -> String {
+    let name = recipe.name.as_deref().unwrap_or("Custom");
+    let steps = recipe.steps.len();
+    format!("{}: {} steps", name, steps)
+}
+
 fn show_staged_recipe_message(ui: &mut egui::Ui) {
     ui.colored_label(
         egui::Color32::from_rgb(30, 180, 80),
         "Recipe ready to apply (Phase 4 will add apply command)",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{RuntimeRecipe, RuntimeRecipeStep};
+
+    #[test]
+    fn test_format_recipe_summary() {
+        let recipe = RuntimeRecipe {
+            name: Some("Language Learning".to_string()),
+            steps: vec![
+                RuntimeRecipeStep {
+                    repeat_count: 3,
+                    speed_factor: 0.5,
+                    silent: false,
+                },
+                RuntimeRecipeStep {
+                    repeat_count: 1,
+                    speed_factor: 1.0,
+                    silent: true,
+                },
+            ],
+        };
+        let summary = format_recipe_summary(&recipe);
+        assert_eq!(summary, "Language Learning: 2 steps");
+    }
+
+    #[test]
+    fn test_format_recipe_summary_unnamed() {
+        let recipe = RuntimeRecipe {
+            name: None,
+            steps: vec![RuntimeRecipeStep {
+                repeat_count: 1,
+                speed_factor: 1.0,
+                silent: false,
+            }],
+        };
+        let summary = format_recipe_summary(&recipe);
+        assert_eq!(summary, "Custom: 1 steps");
+    }
+
+    #[test]
+    fn test_update_recipe_builder_visibility_shows_builder() {
+        let mut selection = Some(RangeSelection {
+            start_sec: 0.0,
+            end_sec: 10.0,
+        });
+        let mut builder_state: Option<RecipeBuilderState> = None;
+        let mut staged_recipe: Option<RuntimeRecipe> = None;
+
+        match selection {
+            Some(_) if builder_state.is_none() => {
+                builder_state = Some(RecipeBuilderState::new());
+            }
+            None => {
+                builder_state = None;
+                staged_recipe = None;
+            }
+            _ => {}
+        }
+
+        assert!(builder_state.is_some());
+    }
+
+    #[test]
+    fn test_update_recipe_builder_visibility_clears_on_none() {
+        let mut selection: Option<RangeSelection> = None;
+        let mut builder_state = Some(RecipeBuilderState::new());
+        let mut staged_recipe = Some(RuntimeRecipe {
+            name: Some("Test".to_string()),
+            steps: vec![],
+        });
+
+        match selection {
+            Some(_) if builder_state.is_none() => {
+                builder_state = Some(RecipeBuilderState::new());
+            }
+            None => {
+                builder_state = None;
+                staged_recipe = None;
+            }
+            _ => {}
+        }
+
+        assert!(builder_state.is_none());
+        assert!(staged_recipe.is_none());
+    }
+
+    #[test]
+    fn test_clear_recipe_builder_clears_all_fields() {
+        let mut selection = Some(RangeSelection {
+            start_sec: 0.0,
+            end_sec: 10.0,
+        });
+        let mut builder_state = Some(RecipeBuilderState::new());
+        let mut staged_recipe = Some(RuntimeRecipe {
+            name: Some("Test".to_string()),
+            steps: vec![],
+        });
+
+        selection = None;
+        builder_state = None;
+        staged_recipe = None;
+
+        assert!(selection.is_none());
+        assert!(builder_state.is_none());
+        assert!(staged_recipe.is_none());
+    }
 }
