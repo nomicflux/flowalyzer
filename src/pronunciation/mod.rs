@@ -26,8 +26,8 @@ const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MAX_CLIP_DURATION_SECS: u64 = 300; // 5 minutes
 
 pub use session::{
-    InitializationProgress, InitializationStage, SessionController, SessionHandle, SessionRuntime,
-    SessionSnapshot,
+    InitializationProgress, InitializationStage, RecipeApplicationProgress, RecipeApplicationStage,
+    SessionController, SessionHandle, SessionRuntime, SessionSnapshot,
 };
 
 /// Convenient alias for results returned by pronunciation modules.

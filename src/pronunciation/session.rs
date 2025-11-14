@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use rodio::buffer::SamplesBuffer;
-use rodio::{OutputStream, OutputStreamHandle, Sink};
+use rodio::{OutputStream, Sink};
 
 use crate::audio::capture::CaptureConfig;
 use crate::audio::playback::duplicate_to_stereo;
@@ -88,6 +88,47 @@ impl InitializationStage {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecipeApplicationStage {
+    ExtractingRange,
+    ApplyingRecipe,
+    AssemblingChunks,
+    ExtractingFeatures,
+    Caching,
+}
+
+impl RecipeApplicationStage {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RecipeApplicationStage::ExtractingRange => "Extracting audio range",
+            RecipeApplicationStage::ApplyingRecipe => "Applying recipe operations",
+            RecipeApplicationStage::AssemblingChunks => "Assembling audio chunks",
+            RecipeApplicationStage::ExtractingFeatures => "Extracting features (mel + pitch)",
+            RecipeApplicationStage::Caching => "Caching features and alignment",
+        }
+    }
+
+    pub fn order(&self) -> usize {
+        match self {
+            RecipeApplicationStage::ExtractingRange => 0,
+            RecipeApplicationStage::ApplyingRecipe => 1,
+            RecipeApplicationStage::AssemblingChunks => 2,
+            RecipeApplicationStage::ExtractingFeatures => 3,
+            RecipeApplicationStage::Caching => 4,
+        }
+    }
+
+    pub fn ordered() -> &'static [RecipeApplicationStage; 5] {
+        &[
+            RecipeApplicationStage::ExtractingRange,
+            RecipeApplicationStage::ApplyingRecipe,
+            RecipeApplicationStage::AssemblingChunks,
+            RecipeApplicationStage::ExtractingFeatures,
+            RecipeApplicationStage::Caching,
+        ]
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InitializationProgress {
     pub stage: InitializationStage,
@@ -139,6 +180,56 @@ impl InitializationProgress {
 }
 
 #[derive(Clone, Debug)]
+pub struct RecipeApplicationProgress {
+    pub stage: RecipeApplicationStage,
+    pub completed_steps: u32,
+    pub total_steps: u32,
+    pub sub_stage_index: u32,
+    pub sub_stage_total: u32,
+    pub sub_stage_label: Option<String>,
+    pub metric_label: Option<String>,
+    pub current_value: Option<u32>,
+    pub total_value: Option<u32>,
+    pub elapsed_secs: Option<u32>,
+}
+
+impl RecipeApplicationProgress {
+    fn new(stage: RecipeApplicationStage) -> Self {
+        Self {
+            stage,
+            completed_steps: stage.order() as u32,
+            total_steps: RecipeApplicationStage::ordered().len() as u32,
+            sub_stage_index: 0,
+            sub_stage_total: 0,
+            sub_stage_label: None,
+            metric_label: None,
+            current_value: None,
+            total_value: None,
+            elapsed_secs: None,
+        }
+    }
+
+    fn with_sub_stage<S: Into<String>>(mut self, index: u32, total: u32, label: S) -> Self {
+        self.sub_stage_index = index;
+        self.sub_stage_total = total;
+        self.sub_stage_label = Some(label.into());
+        self
+    }
+
+    fn with_metric<S: Into<String>>(mut self, label: S, current: u32, total: u32) -> Self {
+        self.metric_label = Some(label.into());
+        self.current_value = Some(current);
+        self.total_value = Some(total);
+        self
+    }
+
+    fn with_elapsed(mut self, elapsed_secs: u32) -> Self {
+        self.elapsed_secs = Some(elapsed_secs);
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct SessionSnapshot {
     pub alignment: AlignmentReport,
     pub scores: PronunciationScores,
@@ -148,7 +239,10 @@ pub struct SessionSnapshot {
     pub error: Option<String>,
     pub initializing: bool,
     pub init_progress: Option<InitializationProgress>,
+    pub recipe_applying: bool,
+    pub recipe_progress: Option<RecipeApplicationProgress>,
     pub active_clip_variant: ClipVariant,
+    pub has_flowalyzed_clip: bool,
 }
 
 impl Default for SessionSnapshot {
@@ -162,7 +256,10 @@ impl Default for SessionSnapshot {
             error: None,
             initializing: true,
             init_progress: None,
+            recipe_applying: false,
+            recipe_progress: None,
             active_clip_variant: ClipVariant::Original,
+            has_flowalyzed_clip: false,
         }
     }
 }
@@ -377,6 +474,20 @@ impl SessionSnapshot {
         self.init_progress = Some(progress);
         self
     }
+
+    pub fn with_recipe_applying(mut self, recipe_applying: bool) -> Self {
+        self.recipe_applying = recipe_applying;
+        if !recipe_applying {
+            self.recipe_progress = None;
+        }
+        self
+    }
+
+    pub fn with_recipe_progress(mut self, progress: RecipeApplicationProgress) -> Self {
+        self.recipe_applying = true;
+        self.recipe_progress = Some(progress);
+        self
+    }
 }
 
 struct InitializationEmitter {
@@ -449,6 +560,88 @@ impl InitializationEmitter {
 
     fn send(&self, progress: InitializationProgress) {
         let snapshot = SessionSnapshot::default().with_progress(progress);
+        let _ = self.tx.send(snapshot);
+    }
+}
+
+struct RecipeApplicationEmitter {
+    tx: Sender<SessionSnapshot>,
+    latest_metrics: Option<(String, u32, u32)>,
+}
+
+impl RecipeApplicationEmitter {
+    fn new(tx: &Sender<SessionSnapshot>) -> Self {
+        Self {
+            tx: tx.clone(),
+            latest_metrics: None,
+        }
+    }
+
+    fn stage(&self, stage: RecipeApplicationStage) {
+        let progress = RecipeApplicationProgress::new(stage);
+        self.send(progress);
+    }
+
+    fn stage_detail<S: Into<String>>(
+        &self,
+        stage: RecipeApplicationStage,
+        index: u32,
+        total: u32,
+        label: S,
+    ) {
+        let progress = RecipeApplicationProgress::new(stage).with_sub_stage(index, total, label);
+        self.send(progress);
+    }
+
+    fn handle_feature_event(&mut self, event: FeatureExtractionEvent) {
+        match event {
+            FeatureExtractionEvent::PhaseStart(phase) => {
+                self.stage_detail(
+                    RecipeApplicationStage::ExtractingFeatures,
+                    phase.order() as u32,
+                    FeatureExtractionPhase::total() as u32,
+                    phase.label(),
+                );
+            }
+            FeatureExtractionEvent::PhaseProgress {
+                phase,
+                label,
+                current,
+                total,
+            } => {
+                self.latest_metrics = Some((label.to_string(), current, total));
+                let progress =
+                    RecipeApplicationProgress::new(RecipeApplicationStage::ExtractingFeatures)
+                        .with_sub_stage(
+                            phase.order() as u32,
+                            FeatureExtractionPhase::total() as u32,
+                            phase.label(),
+                        )
+                        .with_metric(label, current, total);
+                self.send(progress);
+            }
+            FeatureExtractionEvent::PhaseElapsed {
+                phase,
+                elapsed_secs,
+            } => {
+                let mut progress =
+                    RecipeApplicationProgress::new(RecipeApplicationStage::ExtractingFeatures)
+                        .with_sub_stage(
+                            phase.order() as u32,
+                            FeatureExtractionPhase::total() as u32,
+                            phase.label(),
+                        )
+                        .with_elapsed(elapsed_secs);
+                if let Some((ref label, current, total)) = self.latest_metrics {
+                    progress = progress.with_metric(label.clone(), current, total);
+                }
+                self.send(progress);
+            }
+        }
+    }
+
+    fn send(&self, progress: RecipeApplicationProgress) {
+        let snapshot = SessionSnapshot::default().with_recipe_progress(progress);
         let _ = self.tx.send(snapshot);
     }
 }
@@ -800,8 +993,17 @@ pub mod engine {
                 .remove(&ClipVariant::Flowalyzed);
         }
 
-        pub fn cache_flowalyzed_features(&mut self, clip: &RecordedClip) -> Result<()> {
-            let features = self.extractor.extract(clip)?;
+        pub fn cache_flowalyzed_features(
+            &mut self,
+            clip: &RecordedClip,
+            progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
+        ) -> Result<()> {
+            let features = if let Some(mut progress_cb) = progress {
+                self.extractor
+                    .extract_with_progress(clip, &mut progress_cb)?
+            } else {
+                self.extractor.extract(clip)?
+            };
             self.cache_features_and_alignment(ClipVariant::Flowalyzed, features)
         }
 
@@ -934,17 +1136,13 @@ pub mod engine {
     }
 }
 
-enum ActiveClip {
-    Original,
-    Flowalyzed(RecordedClip),
-}
-
 struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
     original_reference: RecordedClip,
-    active_clip: ActiveClip,
+    flowalyzed_clip: Option<RecordedClip>,
     initial_snapshot: SessionSnapshot,
-    player: Option<ReferencePlayer>,
+    playback_sink: Option<Sink>,
+    _playback_stream: Option<OutputStream>, // Keep stream alive during playback
 }
 
 impl EngineRunner {
@@ -1019,23 +1217,20 @@ impl EngineRunner {
         Ok(Self {
             engine,
             original_reference,
-            active_clip: ActiveClip::Original,
+            flowalyzed_clip: None,
             initial_snapshot,
-            player: None,
+            playback_sink: None,
+            _playback_stream: None,
         })
     }
 
-    fn active_clip(&self) -> &RecordedClip {
-        match &self.active_clip {
-            ActiveClip::Original => &self.original_reference,
-            ActiveClip::Flowalyzed(clip) => clip,
-        }
-    }
-
-    fn active_variant(&self) -> ClipVariant {
-        match &self.active_clip {
-            ActiveClip::Original => ClipVariant::Original,
-            ActiveClip::Flowalyzed(_) => ClipVariant::Flowalyzed,
+    fn active_clip(&self, variant: ClipVariant) -> Result<&RecordedClip> {
+        match variant {
+            ClipVariant::Original => Ok(&self.original_reference),
+            ClipVariant::Flowalyzed => self
+                .flowalyzed_clip
+                .as_ref()
+                .ok_or_else(|| PronunciationError::new("flowalyzed clip not available")),
         }
     }
 
@@ -1044,20 +1239,23 @@ impl EngineRunner {
         range_start: f64,
         range_end: f64,
         recipe: &Recipe,
-    ) -> Result<ActiveClip> {
-        let clip = apply_recipe_to_range(&self.original_reference, range_start, range_end, recipe)?;
-        Ok(ActiveClip::Flowalyzed(clip))
+    ) -> Result<RecordedClip> {
+        apply_recipe_to_range(&self.original_reference, range_start, range_end, recipe)
     }
 
-    fn cache_and_activate_flowalyzed(&mut self, clip: &RecordedClip) -> Result<()> {
-        self.engine.cache_flowalyzed_features(clip)?;
+    fn cache_and_activate_flowalyzed(
+        &mut self,
+        clip: &RecordedClip,
+        progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
+    ) -> Result<()> {
+        self.engine.cache_flowalyzed_features(clip, progress)?;
         self.engine.set_active_clip(ClipVariant::Flowalyzed);
         Ok(())
     }
 
     fn run(mut self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
         let mut snapshot = self.initial_snapshot.clone();
-        snapshot.active_clip_variant = self.active_variant();
+        // Snapshot already has correct variant from initial_snapshot, don't overwrite
         info!("session runtime thread running; emitting initial snapshot");
         let _ = updates.send(snapshot.clone());
         while let Ok(command) = commands.recv() {
@@ -1078,7 +1276,9 @@ impl EngineRunner {
                 SessionCommand::Stop => {
                     info!("received stop command");
                     let mut update = self.engine.stop(&mut snapshot);
-                    update.active_clip_variant = self.active_variant();
+                    // Preserve snapshot's variant and flowalyzed state, don't overwrite
+                    update.active_clip_variant = snapshot.active_clip_variant;
+                    update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
                     let _ = updates.send(update);
                 }
                 SessionCommand::Shutdown => {
@@ -1106,33 +1306,32 @@ impl EngineRunner {
         info!("session runtime thread exiting");
     }
 
-    fn get_or_create_player(&mut self) -> Result<&mut ReferencePlayer> {
-        if self.player.is_none() {
-            self.player = Some(ReferencePlayer::new(self.active_clip())?);
-        }
-        Ok(self.player.as_mut().unwrap())
-    }
-
     fn handle_replay_reference(
         &mut self,
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
     ) {
         info!("replay reference command received");
-        snapshot.active_clip_variant = self.active_variant();
-        match self.get_or_create_player() {
-            Ok(player) => {
-                player.stop();
-                if let Err(err) = player.play() {
-                    error!(error = %err, "failed to replay reference");
-                    snapshot.error = Some(err.to_string());
-                } else {
-                    snapshot.reference_playing = true;
-                }
+        // Stop any existing playback
+        self.stop_playback();
+        // Get clip from snapshot variant (source of truth) and prepare samples
+        let (stereo_samples, sample_rate) = match self.active_clip(snapshot.active_clip_variant) {
+            Ok(clip) => (duplicate_to_stereo(&clip.samples), clip.sample_rate),
+            Err(err) => {
+                error!(error = %err, "failed to get clip for replay");
+                snapshot.error = Some(err.to_string());
+                let _ = updates.send(snapshot.clone());
+                return;
+            }
+        };
+        // Create stream and sink, play clip
+        match self.start_playback_with_samples(stereo_samples, sample_rate) {
+            Ok(()) => {
+                snapshot.reference_playing = true;
                 let _ = updates.send(snapshot.clone());
             }
             Err(err) => {
-                error!(error = %err, "failed to get player for replay");
+                error!(error = %err, "failed to start playback");
                 snapshot.error = Some(err.to_string());
                 let _ = updates.send(snapshot.clone());
             }
@@ -1145,12 +1344,34 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
     ) {
         info!("stop replay command received");
-        snapshot.active_clip_variant = self.active_variant();
-        if let Some(player) = self.player.as_mut() {
-            player.stop();
-            snapshot.reference_playing = false;
-            let _ = updates.send(snapshot.clone());
+        self.stop_playback();
+        snapshot.reference_playing = false;
+        let _ = updates.send(snapshot.clone());
+    }
+
+    fn start_playback_with_samples(
+        &mut self,
+        stereo_samples: Vec<f32>,
+        sample_rate: u32,
+    ) -> Result<()> {
+        let (stream, handle) =
+            OutputStream::try_default().map_err(|err| PronunciationError::new(err.to_string()))?;
+        let sink =
+            Sink::try_new(&handle).map_err(|err| PronunciationError::new(err.to_string()))?;
+        let buffer = SamplesBuffer::new(2, sample_rate, stereo_samples);
+        sink.append(buffer);
+        sink.play();
+        sink.set_volume(1.0);
+        self.playback_sink = Some(sink);
+        self._playback_stream = Some(stream);
+        Ok(())
+    }
+
+    fn stop_playback(&mut self) {
+        if let Some(sink) = self.playback_sink.take() {
+            sink.stop();
         }
+        self._playback_stream = None;
     }
 
     fn handle_apply_recipe(
@@ -1161,7 +1382,10 @@ impl EngineRunner {
         range_end: f64,
         recipe: Recipe,
     ) {
+        let emitter = RecipeApplicationEmitter::new(updates);
+        emitter.stage(RecipeApplicationStage::ExtractingRange);
         self.prepare_recipe_application(range_start, range_end, &recipe);
+        emitter.stage(RecipeApplicationStage::ApplyingRecipe);
         let new_clip = match self.generate_flowalyzed_clip(range_start, range_end, &recipe) {
             Ok(clip) => clip,
             Err(err) => {
@@ -1169,10 +1393,28 @@ impl EngineRunner {
                 return;
             }
         };
-        if let Err(err) = self.activate_flowalyzed_clip(&new_clip, snapshot) {
+        emitter.stage(RecipeApplicationStage::AssemblingChunks);
+        emitter.stage(RecipeApplicationStage::ExtractingFeatures);
+        let tx = updates.clone();
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let metrics_state = Rc::new(RefCell::new(None::<(String, u32, u32)>));
+        let metrics_state_clone = metrics_state.clone();
+        let progress_callback = Box::new(move |event: FeatureExtractionEvent| {
+            let mut temp_emitter = RecipeApplicationEmitter::new(&tx);
+            temp_emitter.latest_metrics = metrics_state_clone.borrow().clone();
+            temp_emitter.handle_feature_event(event);
+            if let Some(metrics) = &temp_emitter.latest_metrics {
+                *metrics_state_clone.borrow_mut() = Some(metrics.clone());
+            }
+        });
+        if let Err(err) =
+            self.activate_flowalyzed_clip(&new_clip, snapshot, Some(progress_callback))
+        {
             self.emit_cache_error(updates, snapshot, err);
             return;
         }
+        emitter.stage(RecipeApplicationStage::Caching);
         self.complete_recipe_application(new_clip, updates, snapshot);
     }
 
@@ -1186,12 +1428,14 @@ impl EngineRunner {
 
     fn complete_recipe_application(
         &mut self,
-        new_clip: ActiveClip,
+        new_clip: RecordedClip,
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
     ) {
-        self.active_clip = new_clip;
-        snapshot.active_clip_variant = self.active_variant();
+        self.flowalyzed_clip = Some(new_clip);
+        snapshot.active_clip_variant = ClipVariant::Flowalyzed;
+        snapshot.has_flowalyzed_clip = true;
+        snapshot.recipe_applying = false;
         info!("flowalyzed clip generated and activated successfully");
         let _ = updates.send(snapshot.clone());
     }
@@ -1204,19 +1448,18 @@ impl EngineRunner {
     ) {
         error!(error = %err, "failed to generate flowalyzed clip");
         snapshot.error = Some(err.to_string());
-        snapshot.active_clip_variant = self.active_variant();
+        // Don't overwrite snapshot's variant - preserve current state
+        snapshot.recipe_applying = false;
         let _ = updates.send(snapshot.clone());
     }
 
     fn activate_flowalyzed_clip(
         &mut self,
-        new_clip: &ActiveClip,
+        new_clip: &RecordedClip,
         _snapshot: &mut SessionSnapshot,
+        progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
     ) -> Result<()> {
-        let ActiveClip::Flowalyzed(clip) = new_clip else {
-            unreachable!("generate_flowalyzed_clip always returns Flowalyzed variant");
-        };
-        self.cache_and_activate_flowalyzed(clip)
+        self.cache_and_activate_flowalyzed(new_clip, progress)
     }
 
     fn emit_cache_error(
@@ -1227,7 +1470,8 @@ impl EngineRunner {
     ) {
         error!(error = %err, "failed to cache flowalyzed features");
         snapshot.error = Some(err.to_string());
-        snapshot.active_clip_variant = self.active_variant();
+        // Don't overwrite snapshot's variant - preserve current state
+        snapshot.recipe_applying = false;
         let _ = updates.send(snapshot.clone());
     }
 
@@ -1237,10 +1481,9 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
         variant: ClipVariant,
     ) {
-        let current = self.active_variant();
+        let current = snapshot.active_clip_variant; // Read from snapshot, not engine
         if current == variant {
             info!(?variant, "already on requested variant, no change needed");
-            snapshot.active_clip_variant = current;
             let _ = updates.send(snapshot.clone());
             return;
         }
@@ -1248,14 +1491,13 @@ impl EngineRunner {
             error!("cannot toggle to flowalyzed: no flowalyzed clip exists");
             snapshot.error =
                 Some("No flowalyzed clip available. Apply a recipe first.".to_string());
-            snapshot.active_clip_variant = current;
             let _ = updates.send(snapshot.clone());
             return;
         }
+        // Update engine's active_clip to match snapshot
         if let Err(err) = self.apply_variant_change(variant) {
             error!(error = %err, "failed to toggle variant");
             snapshot.error = Some(err.to_string());
-            snapshot.active_clip_variant = current;
             let _ = updates.send(snapshot.clone());
             return;
         }
@@ -1265,7 +1507,7 @@ impl EngineRunner {
     }
 
     fn can_toggle_to_flowalyzed(&self) -> bool {
-        matches!(self.active_clip, ActiveClip::Flowalyzed(_))
+        self.flowalyzed_clip.is_some()
     }
 
     fn apply_variant_change(&mut self, variant: ClipVariant) -> Result<()> {
@@ -1288,19 +1530,22 @@ impl EngineRunner {
                 return LoopExit::Finished;
             }
         };
-        start_update.active_clip_variant = self.active_variant();
+        // Preserve snapshot's variant and flowalyzed state, don't overwrite
+        start_update.active_clip_variant = snapshot.active_clip_variant;
+        start_update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
         let _ = updates.send(start_update);
         info!("starting reference playback");
-        let player = match self.get_or_create_player() {
-            Ok(player) => player,
+        // Get clip from snapshot variant (source of truth) and prepare samples
+        let (stereo_samples, sample_rate) = match self.active_clip(snapshot.active_clip_variant) {
+            Ok(clip) => (duplicate_to_stereo(&clip.samples), clip.sample_rate),
             Err(err) => {
-                error!(error = %err, "failed to create reference player");
+                error!(error = %err, "failed to get clip for playback");
                 self.engine.stop(snapshot);
                 emit_error(updates, snapshot, err.to_string());
                 return LoopExit::Finished;
             }
         };
-        if let Err(err) = player.play() {
+        if let Err(err) = self.start_playback_with_samples(stereo_samples, sample_rate) {
             error!(error = %err, "failed to start reference playback");
             self.engine.stop(snapshot);
             emit_error(updates, snapshot, err.to_string());
@@ -1322,20 +1567,20 @@ impl EngineRunner {
                     SessionCommand::Shutdown => {
                         info!("shutdown command received");
                         let mut update = self.engine.stop(snapshot);
-                        update.active_clip_variant = self.active_variant();
-                        if let Some(player) = self.player.as_mut() {
-                            player.stop();
-                        }
+                        // Preserve snapshot's variant and flowalyzed state, don't overwrite
+                        update.active_clip_variant = snapshot.active_clip_variant;
+                        update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
+                        self.stop_playback();
                         let _ = updates.send(update);
                         return LoopExit::Shutdown;
                     }
                     SessionCommand::Stop => {
                         info!("stop command received");
                         let mut update = self.engine.stop(snapshot);
-                        update.active_clip_variant = self.active_variant();
-                        if let Some(player) = self.player.as_mut() {
-                            player.stop();
-                        }
+                        // Preserve snapshot's variant and flowalyzed state, don't overwrite
+                        update.active_clip_variant = snapshot.active_clip_variant;
+                        update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
+                        self.stop_playback();
                         let _ = updates.send(update);
                         return LoopExit::Finished;
                     }
@@ -1362,16 +1607,16 @@ impl EngineRunner {
             }
             match self.engine.poll(snapshot) {
                 Ok(Some(mut update)) => {
-                    update.active_clip_variant = self.active_variant();
+                    // Preserve snapshot's variant and flowalyzed state, don't overwrite
+                    update.active_clip_variant = snapshot.active_clip_variant;
+                    update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
                     let _ = updates.send(update);
                 }
                 Ok(None) => {}
                 Err(err) => {
                     error!(error = %err, "capture engine error during poll");
                     self.engine.stop(snapshot);
-                    if let Some(player) = self.player.as_mut() {
-                        player.stop();
-                    }
+                    self.stop_playback();
                     emit_error(updates, snapshot, err.to_string());
                     return LoopExit::Finished;
                 }
@@ -1425,46 +1670,6 @@ fn emit_error(updates: &Sender<SessionSnapshot>, snapshot: &mut SessionSnapshot,
         .with_error_message(message);
     let _ = updates.send(next.clone());
     *snapshot = next;
-}
-
-struct ReferencePlayer {
-    _stream: OutputStream,
-    handle: OutputStreamHandle,
-    samples: Vec<f32>,
-    sample_rate: u32,
-    sink: Option<Sink>,
-}
-
-impl ReferencePlayer {
-    fn new(clip: &RecordedClip) -> Result<Self> {
-        let stereo = duplicate_to_stereo(&clip.samples);
-        let (stream, handle) =
-            OutputStream::try_default().map_err(|err| PronunciationError::new(err.to_string()))?;
-        Ok(Self {
-            samples: stereo,
-            sample_rate: clip.sample_rate,
-            _stream: stream,
-            handle,
-            sink: None,
-        })
-    }
-
-    fn play(&mut self) -> Result<()> {
-        let sink =
-            Sink::try_new(&self.handle).map_err(|err| PronunciationError::new(err.to_string()))?;
-        let buffer = SamplesBuffer::new(2, self.sample_rate, self.samples.clone());
-        sink.append(buffer);
-        sink.play();
-        sink.set_volume(1.0);
-        self.sink = Some(sink);
-        Ok(())
-    }
-
-    fn stop(&mut self) {
-        if let Some(sink) = self.sink.take() {
-            sink.stop();
-        }
-    }
 }
 
 #[derive(Clone)]

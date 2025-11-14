@@ -94,7 +94,7 @@ fn test_invalidate_flowalyzed_cache() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip)?;
+    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
 
     let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
@@ -137,7 +137,7 @@ fn test_cache_flowalyzed_features() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip)?;
+    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
 
     let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
@@ -239,7 +239,7 @@ fn test_set_active_clip() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip)?;
+    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
 
     engine.set_active_clip(ClipVariant::Flowalyzed);
 
@@ -271,7 +271,7 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip)?;
+    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
 
     let mut snapshot = flowalyzer::pronunciation::SessionSnapshot::default();
     engine.start(&mut snapshot)?;

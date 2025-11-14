@@ -27,11 +27,6 @@ where
 {
     info!("ensuring sample rate for pitch extraction");
     let samples = ensure_sample_rate(clip)?;
-    let elapsed_secs = start_time.elapsed().as_secs() as u32;
-    reporter(FeatureExtractionEvent::PhaseElapsed {
-        phase: FeatureExtractionPhase::PitchContour,
-        elapsed_secs,
-    });
     info!(
         elapsed_secs = start_time.elapsed().as_secs_f64(),
         samples = samples.len(),
@@ -41,11 +36,6 @@ where
     info!("converting to f64 for pitch");
     let audio: Vec<f64> = samples.into_iter().map(|s| s as f64).collect();
     let audio = Arc::new(audio);
-    let elapsed_secs = start_time.elapsed().as_secs() as u32;
-    reporter(FeatureExtractionEvent::PhaseElapsed {
-        phase: FeatureExtractionPhase::PitchContour,
-        elapsed_secs,
-    });
     info!(
         elapsed_secs = start_time.elapsed().as_secs_f64(),
         "conversion to f64 complete for pitch"
@@ -341,6 +331,7 @@ fn interpolate(series: &[f32], frame_count: usize, len: usize) -> Vec<f32> {
         let position = frame as f32 * (len - 1) as f32 / denom;
         let lower = position.floor() as usize;
         let upper = position.ceil() as usize;
+        let upper = upper.min(len - 1);
         if lower == upper {
             aligned.push(series[lower]);
             continue;

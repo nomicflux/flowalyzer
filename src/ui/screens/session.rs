@@ -3,8 +3,8 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::pronunciation::{
-    AlignedPhoneme, AlignmentReport, ClipVariant, InitializationStage, Result as SessionResult,
-    SessionController, SessionHandle, SessionSnapshot,
+    AlignedPhoneme, AlignmentReport, ClipVariant, InitializationStage, RecipeApplicationStage,
+    Result as SessionResult, SessionController, SessionHandle, SessionSnapshot,
 };
 use crate::types::{Recipe, RuntimeRecipe};
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
@@ -143,8 +143,7 @@ impl SessionApp {
                     latency_ms: self.snapshot.latency_ms,
                     latency_budget_ms: self.latency_budget_ms,
                     active_clip_variant: self.snapshot.active_clip_variant,
-                    has_flowalyzed_clip: self.snapshot.active_clip_variant
-                        == ClipVariant::Flowalyzed,
+                    has_flowalyzed_clip: self.snapshot.has_flowalyzed_clip,
                 };
                 let output = strip.show(ui);
                 actions.merge(output.into());
@@ -212,7 +211,60 @@ impl SessionApp {
     }
 
     fn show_recipe_status(&self, ui: &mut egui::Ui) {
-        if let Some(status) = &self.recipe_status {
+        if self.snapshot.recipe_applying {
+            if let Some(progress) = &self.snapshot.recipe_progress {
+                let stage_number = progress.stage.order() + 1;
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 160, 20),
+                    format!(
+                        "Applying recipe… Stage {}/{}: {}",
+                        stage_number,
+                        progress.total_steps,
+                        progress.stage.label()
+                    ),
+                );
+                ui.add_space(4.0);
+                for stage in RecipeApplicationStage::ordered().iter() {
+                    let marker = if stage.order() < progress.completed_steps as usize {
+                        "✓"
+                    } else if *stage == progress.stage {
+                        "…"
+                    } else {
+                        "•"
+                    };
+                    ui.label(format!("{} {}", marker, stage.label()));
+                }
+                if progress.sub_stage_total > 0 {
+                    let current = progress
+                        .sub_stage_index
+                        .max(1)
+                        .min(progress.sub_stage_total)
+                        .max(1);
+                    if let Some(label) = &progress.sub_stage_label {
+                        ui.label(format!(
+                            "    ↳ {} (step {}/{})",
+                            label, current, progress.sub_stage_total
+                        ));
+                    }
+                }
+                if let (Some(label), Some(curr)) = (&progress.metric_label, progress.current_value)
+                {
+                    if let Some(total) = progress.total_value {
+                        ui.label(format!("    ↳ {} {} / {}", label, curr, total));
+                    } else {
+                        ui.label(format!("    ↳ {} {}", label, curr));
+                    }
+                }
+                if let Some(secs) = progress.elapsed_secs {
+                    ui.label(format!("       {}s elapsed", secs));
+                }
+            } else {
+                ui.colored_label(
+                    egui::Color32::from_rgb(210, 160, 20),
+                    "Applying recipe... Please wait.",
+                );
+            }
+        } else if let Some(status) = &self.recipe_status {
             match status {
                 RecipeStatus::Applying => {
                     ui.colored_label(egui::Color32::from_rgb(210, 160, 20), "Applying recipe...");
@@ -454,6 +506,10 @@ impl SessionApp {
         let (apply_requested, clear_requested) = self.render_recipe_builder_panel(ctx);
 
         if apply_requested {
+            // Convert builder state to staged recipe before applying
+            if let Some(state) = &self.recipe_builder_state {
+                self.staged_recipe = Some(state.to_runtime_recipe());
+            }
             self.apply_recipe();
         }
         if clear_requested {
