@@ -1,3 +1,4 @@
+use crate::pronunciation::ClipVariant;
 use eframe::egui;
 
 #[derive(Default, Debug)]
@@ -5,6 +6,7 @@ pub struct ControlStripOutput {
     pub toggle_recording: bool,
     pub replay_reference: bool,
     pub stop_replay: bool,
+    pub toggle_to_variant: Option<ClipVariant>,
 }
 
 pub struct ControlStrip {
@@ -12,6 +14,8 @@ pub struct ControlStrip {
     pub reference_playing: bool,
     pub latency_ms: f32,
     pub latency_budget_ms: u32,
+    pub active_clip_variant: ClipVariant,
+    pub has_flowalyzed_clip: bool,
 }
 
 impl ControlStrip {
@@ -30,18 +34,26 @@ impl ControlStrip {
         }
         ui.separator();
         latency_badge(ui, self.latency_ms, self.latency_budget_ms);
+        ui.separator();
+        if let Some(variant) =
+            clip_variant_toggle(ui, self.active_clip_variant, self.has_flowalyzed_clip)
+        {
+            output.toggle_to_variant = Some(variant);
+        }
         output
     }
 }
 
 fn record_button(ui: &mut egui::Ui, is_recording: bool) -> bool {
     let label = if is_recording {
-        "Stop Recording"
+        "Stop Shadowing"
     } else {
-        "Start Recording"
+        "Start Shadowing"
     };
     ui.button(label)
-        .on_hover_text("Space toggles recording. Input is always live audio captured in-session.")
+        .on_hover_text(
+            "Space toggles shadowing. Starts reference playback and records your pronunciation.",
+        )
         .clicked()
 }
 
@@ -76,4 +88,41 @@ fn latency_badge(ui: &mut egui::Ui, latency_ms: f32, budget_ms: u32) {
     let text = format!("Latency {:.0} ms (budget {} ms)", latency_ms, budget_ms);
     ui.colored_label(color, text)
         .on_hover_text("Capture-to-feedback latency must stay within the 200 ms budget.");
+}
+
+fn clip_variant_toggle(
+    ui: &mut egui::Ui,
+    active: ClipVariant,
+    has_flowalyzed: bool,
+) -> Option<ClipVariant> {
+    let mut result = None;
+    ui.horizontal(|ui| {
+        ui.label("Clip:");
+        let original_selected = active == ClipVariant::Original;
+        if ui
+            .selectable_label(original_selected, "Original")
+            .on_hover_text("Use original reference clip for analysis")
+            .clicked()
+            && !original_selected
+        {
+            result = Some(ClipVariant::Original);
+            return;
+        }
+        ui.add_enabled_ui(has_flowalyzed, |ui| {
+            let flowalyzed_selected = active == ClipVariant::Flowalyzed;
+            if ui
+                .selectable_label(flowalyzed_selected, "Flowalyzed")
+                .on_hover_text(if has_flowalyzed {
+                    "Use flowalyzed clip for analysis"
+                } else {
+                    "Apply a recipe first to generate flowalyzed clip"
+                })
+                .clicked()
+                && !flowalyzed_selected
+            {
+                result = Some(ClipVariant::Flowalyzed);
+            }
+        });
+    });
+    result
 }

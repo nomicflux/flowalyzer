@@ -10,6 +10,7 @@ use rodio::{OutputStream, OutputStreamHandle, Sink};
 
 use crate::audio::capture::CaptureConfig;
 use crate::audio::playback::duplicate_to_stereo;
+use crate::types::Recipe;
 use tracing::{debug, error, info};
 
 use super::alignment::AudioAligner;
@@ -17,8 +18,9 @@ use super::features::FeatureExtractor;
 use super::metrics::MetricCalculator;
 use super::validate_config;
 use super::{
-    load_clip, AlignmentReport, ClipVariant, PronunciationError, PronunciationFeatures,
-    PronunciationScores, RecordedClip, Result, SessionConfig, TARGET_SAMPLE_RATE,
+    apply_recipe_to_range, load_clip, AlignmentReport, ClipVariant, PronunciationError,
+    PronunciationFeatures, PronunciationScores, RecordedClip, Result, SessionConfig,
+    TARGET_SAMPLE_RATE,
 };
 
 const CAPTURE_POLL_MS: u64 = 20;
@@ -56,6 +58,7 @@ pub struct SessionSnapshot {
     pub latency_ms: f32,
     pub error: Option<String>,
     pub initializing: bool,
+    pub active_clip_variant: ClipVariant,
 }
 
 impl Default for SessionSnapshot {
@@ -68,6 +71,7 @@ impl Default for SessionSnapshot {
             latency_ms: 0.0,
             error: None,
             initializing: true,
+            active_clip_variant: ClipVariant::Original,
         }
     }
 }
@@ -301,6 +305,24 @@ impl SessionController {
         self.send(SessionCommand::Shutdown, "shutdown session")
     }
 
+    pub fn apply_recipe(&self, range_start: f64, range_end: f64, recipe: Recipe) -> Result<()> {
+        self.send(
+            SessionCommand::ApplyFlowalyzerRecipe {
+                range_start,
+                range_end,
+                recipe,
+            },
+            "apply flowalyzer recipe",
+        )
+    }
+
+    pub fn toggle_clip_variant(&self, variant: ClipVariant) -> Result<()> {
+        self.send(
+            SessionCommand::ToggleClipVariant { variant },
+            "toggle clip variant",
+        )
+    }
+
     fn send(&self, command: SessionCommand, label: &str) -> Result<()> {
         self.tx
             .send(command)
@@ -356,6 +378,7 @@ pub mod engine {
             defer_feature_extraction: bool,
         ) -> Result<Self> {
             let extractor = FeatureExtractor::new();
+            let aligner = AudioAligner::new(alignment);
             let mut reference_features_cache = HashMap::new();
             let mut reference_alignment_cache = HashMap::new();
 
@@ -384,14 +407,14 @@ pub mod engine {
                 );
                 reference_features_cache.insert(ClipVariant::Original, reference_features.clone());
                 let reference_alignment =
-                    Self::create_reference_alignment(&reference_features, reference.samples.len());
+                    aligner.align(&reference_features, &reference_features)?;
                 reference_alignment_cache.insert(ClipVariant::Original, reference_alignment);
             }
             let reference_samples = reference.samples.len();
             Ok(Self {
                 capture,
                 extractor,
-                aligner: AudioAligner::new(alignment),
+                aligner,
                 metrics: MetricCalculator::new(),
                 reference_features_cache,
                 reference_alignment_cache,
@@ -494,12 +517,7 @@ pub mod engine {
             self.validate_defer_mode(variant)?;
             let reference_clip = self.get_clip_for_variant(variant)?;
             let reference_features = self.extract_features_lazy(reference_clip, variant)?;
-            self.cache_features_and_alignment(
-                variant,
-                reference_features,
-                reference_clip.samples.len(),
-            );
-            Ok(())
+            self.cache_features_and_alignment(variant, reference_features)
         }
 
         fn validate_defer_mode(&self, variant: ClipVariant) -> Result<()> {
@@ -558,26 +576,11 @@ pub mod engine {
             &mut self,
             variant: ClipVariant,
             features: PronunciationFeatures,
-            sample_count: usize,
-        ) {
-            self.reference_features_cache
-                .insert(variant, features.clone());
-            let alignment = Self::create_reference_alignment(&features, sample_count);
+        ) -> Result<()> {
+            let alignment = self.aligner.align(&features, &features)?;
+            self.reference_features_cache.insert(variant, features);
             self.reference_alignment_cache.insert(variant, alignment);
-        }
-
-        fn create_reference_alignment(
-            features: &PronunciationFeatures,
-            sample_count: usize,
-        ) -> AlignmentReport {
-            let mut alignment = AlignmentReport::default();
-            alignment.total_duration =
-                Duration::from_secs_f32(sample_count as f32 / TARGET_SAMPLE_RATE as f32);
-            alignment.reference_energy = features.energy.to_vec();
-            alignment.reference_pitch = features.pitch_contour.to_vec();
-            alignment.similarity_band = normalize_band(&alignment.reference_energy);
-            alignment.contour_band = alignment.reference_pitch.clone();
-            alignment
+            Ok(())
         }
 
         pub fn set_active_clip(&mut self, variant: ClipVariant) {
@@ -593,12 +596,7 @@ pub mod engine {
 
         pub fn cache_flowalyzed_features(&mut self, clip: &RecordedClip) -> Result<()> {
             let features = self.extractor.extract(clip)?;
-            let alignment = Self::create_reference_alignment(&features, clip.samples.len());
-            self.reference_features_cache
-                .insert(ClipVariant::Flowalyzed, features);
-            self.reference_alignment_cache
-                .insert(ClipVariant::Flowalyzed, alignment);
-            Ok(())
+            self.cache_features_and_alignment(ClipVariant::Flowalyzed, features)
         }
 
         fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
@@ -728,27 +726,17 @@ pub mod engine {
             self.started = false;
         }
     }
+}
 
-    fn normalize_band(values: &[f32]) -> Vec<f32> {
-        if values.is_empty() {
-            return Vec::new();
-        }
-        let max = values
-            .iter()
-            .cloned()
-            .fold(0.0_f32, |acc, v| acc.max(v.abs()))
-            .max(1e-6);
-        values
-            .iter()
-            .map(|v| (v.abs() / max).clamp(0.0, 1.0))
-            .collect()
-    }
+enum ActiveClip {
+    Original,
+    Flowalyzed(RecordedClip),
 }
 
 struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
     original_reference: RecordedClip,
-    active_clip: ClipVariant,
+    active_clip: ActiveClip,
     initial_snapshot: SessionSnapshot,
     player: Option<ReferencePlayer>,
 }
@@ -805,9 +793,10 @@ impl EngineRunner {
             phonemes = initial_alignment.phonemes.len(),
             "initial reference alignment computed"
         );
-        let initial_snapshot = SessionSnapshot::default()
+        let mut initial_snapshot = SessionSnapshot::default()
             .with_alignment(initial_alignment, PronunciationScores::default())
             .with_initializing(false);
+        initial_snapshot.active_clip_variant = ClipVariant::Original;
         let total_elapsed = build_start.elapsed();
         info!(
             total_elapsed_secs = total_elapsed.as_secs_f64(),
@@ -816,23 +805,45 @@ impl EngineRunner {
         Ok(Self {
             engine,
             original_reference,
-            active_clip: ClipVariant::Original,
+            active_clip: ActiveClip::Original,
             initial_snapshot,
             player: None,
         })
     }
 
     fn active_clip(&self) -> &RecordedClip {
-        match self.active_clip {
-            ClipVariant::Original => &self.original_reference,
-            ClipVariant::Flowalyzed => {
-                panic!("active_clip is Flowalyzed but flowalyzed_reference not implemented until Phase 4.2")
-            }
+        match &self.active_clip {
+            ActiveClip::Original => &self.original_reference,
+            ActiveClip::Flowalyzed(clip) => clip,
         }
+    }
+
+    fn active_variant(&self) -> ClipVariant {
+        match &self.active_clip {
+            ActiveClip::Original => ClipVariant::Original,
+            ActiveClip::Flowalyzed(_) => ClipVariant::Flowalyzed,
+        }
+    }
+
+    fn generate_flowalyzed_clip(
+        &self,
+        range_start: f64,
+        range_end: f64,
+        recipe: &Recipe,
+    ) -> Result<ActiveClip> {
+        let clip = apply_recipe_to_range(&self.original_reference, range_start, range_end, recipe)?;
+        Ok(ActiveClip::Flowalyzed(clip))
+    }
+
+    fn cache_and_activate_flowalyzed(&mut self, clip: &RecordedClip) -> Result<()> {
+        self.engine.cache_flowalyzed_features(clip)?;
+        self.engine.set_active_clip(ClipVariant::Flowalyzed);
+        Ok(())
     }
 
     fn run(mut self, commands: Receiver<SessionCommand>, updates: Sender<SessionSnapshot>) {
         let mut snapshot = self.initial_snapshot.clone();
+        snapshot.active_clip_variant = self.active_variant();
         info!("session runtime thread running; emitting initial snapshot");
         let _ = updates.send(snapshot.clone());
         while let Ok(command) = commands.recv() {
@@ -852,12 +863,29 @@ impl EngineRunner {
                 }
                 SessionCommand::Stop => {
                     info!("received stop command");
-                    let update = self.engine.stop(&mut snapshot);
+                    let mut update = self.engine.stop(&mut snapshot);
+                    update.active_clip_variant = self.active_variant();
                     let _ = updates.send(update);
                 }
                 SessionCommand::Shutdown => {
                     info!("received shutdown command");
                     break;
+                }
+                SessionCommand::ApplyFlowalyzerRecipe {
+                    range_start,
+                    range_end,
+                    recipe,
+                } => {
+                    self.handle_apply_recipe(
+                        &updates,
+                        &mut snapshot,
+                        range_start,
+                        range_end,
+                        recipe,
+                    );
+                }
+                SessionCommand::ToggleClipVariant { variant } => {
+                    self.handle_toggle_variant(&updates, &mut snapshot, variant);
                 }
             }
         }
@@ -877,6 +905,7 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
     ) {
         info!("replay reference command received");
+        snapshot.active_clip_variant = self.active_variant();
         match self.get_or_create_player() {
             Ok(player) => {
                 player.stop();
@@ -902,11 +931,132 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
     ) {
         info!("stop replay command received");
+        snapshot.active_clip_variant = self.active_variant();
         if let Some(player) = self.player.as_mut() {
             player.stop();
             snapshot.reference_playing = false;
             let _ = updates.send(snapshot.clone());
         }
+    }
+
+    fn handle_apply_recipe(
+        &mut self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+        range_start: f64,
+        range_end: f64,
+        recipe: Recipe,
+    ) {
+        self.prepare_recipe_application(range_start, range_end, &recipe);
+        let new_clip = match self.generate_flowalyzed_clip(range_start, range_end, &recipe) {
+            Ok(clip) => clip,
+            Err(err) => {
+                self.emit_generation_error(updates, snapshot, err);
+                return;
+            }
+        };
+        if let Err(err) = self.activate_flowalyzed_clip(&new_clip, snapshot) {
+            self.emit_cache_error(updates, snapshot, err);
+            return;
+        }
+        self.complete_recipe_application(new_clip, updates, snapshot);
+    }
+
+    fn prepare_recipe_application(&mut self, range_start: f64, range_end: f64, recipe: &Recipe) {
+        info!(
+            range_start, range_end, recipe = %recipe.name,
+            "apply recipe command received"
+        );
+        self.engine.invalidate_flowalyzed_cache();
+    }
+
+    fn complete_recipe_application(
+        &mut self,
+        new_clip: ActiveClip,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+    ) {
+        self.active_clip = new_clip;
+        snapshot.active_clip_variant = self.active_variant();
+        info!("flowalyzed clip generated and activated successfully");
+        let _ = updates.send(snapshot.clone());
+    }
+
+    fn emit_generation_error(
+        &self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+        err: PronunciationError,
+    ) {
+        error!(error = %err, "failed to generate flowalyzed clip");
+        snapshot.error = Some(err.to_string());
+        snapshot.active_clip_variant = self.active_variant();
+        let _ = updates.send(snapshot.clone());
+    }
+
+    fn activate_flowalyzed_clip(
+        &mut self,
+        new_clip: &ActiveClip,
+        _snapshot: &mut SessionSnapshot,
+    ) -> Result<()> {
+        let ActiveClip::Flowalyzed(clip) = new_clip else {
+            unreachable!("generate_flowalyzed_clip always returns Flowalyzed variant");
+        };
+        self.cache_and_activate_flowalyzed(clip)
+    }
+
+    fn emit_cache_error(
+        &self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+        err: PronunciationError,
+    ) {
+        error!(error = %err, "failed to cache flowalyzed features");
+        snapshot.error = Some(err.to_string());
+        snapshot.active_clip_variant = self.active_variant();
+        let _ = updates.send(snapshot.clone());
+    }
+
+    fn handle_toggle_variant(
+        &mut self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+        variant: ClipVariant,
+    ) {
+        let current = self.active_variant();
+        if current == variant {
+            info!(?variant, "already on requested variant, no change needed");
+            snapshot.active_clip_variant = current;
+            let _ = updates.send(snapshot.clone());
+            return;
+        }
+        if variant == ClipVariant::Flowalyzed && !self.can_toggle_to_flowalyzed() {
+            error!("cannot toggle to flowalyzed: no flowalyzed clip exists");
+            snapshot.error =
+                Some("No flowalyzed clip available. Apply a recipe first.".to_string());
+            snapshot.active_clip_variant = current;
+            let _ = updates.send(snapshot.clone());
+            return;
+        }
+        if let Err(err) = self.apply_variant_change(variant) {
+            error!(error = %err, "failed to toggle variant");
+            snapshot.error = Some(err.to_string());
+            snapshot.active_clip_variant = current;
+            let _ = updates.send(snapshot.clone());
+            return;
+        }
+        snapshot.active_clip_variant = variant;
+        info!(?variant, "variant toggled successfully");
+        let _ = updates.send(snapshot.clone());
+    }
+
+    fn can_toggle_to_flowalyzed(&self) -> bool {
+        matches!(self.active_clip, ActiveClip::Flowalyzed(_))
+    }
+
+    fn apply_variant_change(&mut self, variant: ClipVariant) -> Result<()> {
+        self.engine.set_active_clip(variant);
+        Ok(())
     }
 
     fn handle_start(
@@ -916,7 +1066,7 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
     ) -> LoopExit {
         info!("recording session starting");
-        let start_update = match self.engine.start(snapshot) {
+        let mut start_update = match self.engine.start(snapshot) {
             Ok(update) => update,
             Err(err) => {
                 error!(error = %err, "failed to start capture engine");
@@ -924,6 +1074,7 @@ impl EngineRunner {
                 return LoopExit::Finished;
             }
         };
+        start_update.active_clip_variant = self.active_variant();
         let _ = updates.send(start_update);
         info!("starting reference playback");
         let player = match self.get_or_create_player() {
@@ -956,7 +1107,8 @@ impl EngineRunner {
                 match command {
                     SessionCommand::Shutdown => {
                         info!("shutdown command received");
-                        let update = self.engine.stop(snapshot);
+                        let mut update = self.engine.stop(snapshot);
+                        update.active_clip_variant = self.active_variant();
                         if let Some(player) = self.player.as_mut() {
                             player.stop();
                         }
@@ -965,7 +1117,8 @@ impl EngineRunner {
                     }
                     SessionCommand::Stop => {
                         info!("stop command received");
-                        let update = self.engine.stop(snapshot);
+                        let mut update = self.engine.stop(snapshot);
+                        update.active_clip_variant = self.active_variant();
                         if let Some(player) = self.player.as_mut() {
                             player.stop();
                         }
@@ -981,10 +1134,21 @@ impl EngineRunner {
                     SessionCommand::StopReplay => {
                         self.handle_stop_replay(updates, snapshot);
                     }
+                    SessionCommand::ApplyFlowalyzerRecipe {
+                        range_start,
+                        range_end,
+                        recipe,
+                    } => {
+                        self.handle_apply_recipe(updates, snapshot, range_start, range_end, recipe);
+                    }
+                    SessionCommand::ToggleClipVariant { variant } => {
+                        self.handle_toggle_variant(updates, snapshot, variant);
+                    }
                 }
             }
             match self.engine.poll(snapshot) {
-                Ok(Some(update)) => {
+                Ok(Some(mut update)) => {
+                    update.active_clip_variant = self.active_variant();
                     let _ = updates.send(update);
                 }
                 Ok(None) => {}
@@ -1089,11 +1253,19 @@ impl ReferencePlayer {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum SessionCommand {
     Start,
     Stop,
     ReplayReference,
     StopReplay,
     Shutdown,
+    ApplyFlowalyzerRecipe {
+        range_start: f64,
+        range_end: f64,
+        recipe: Recipe,
+    },
+    ToggleClipVariant {
+        variant: ClipVariant,
+    },
 }

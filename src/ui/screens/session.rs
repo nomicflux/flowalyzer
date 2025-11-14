@@ -3,8 +3,8 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::pronunciation::{
-    AlignedPhoneme, AlignmentReport, Result as SessionResult, SessionController, SessionHandle,
-    SessionSnapshot,
+    AlignedPhoneme, AlignmentReport, ClipVariant, Result as SessionResult, SessionController,
+    SessionHandle, SessionSnapshot,
 };
 use crate::types::RuntimeRecipe;
 use crate::ui::components::control_strip::{ControlStrip, ControlStripOutput};
@@ -116,6 +116,9 @@ impl SessionApp {
                     reference_playing: self.snapshot.reference_playing,
                     latency_ms: self.snapshot.latency_ms,
                     latency_budget_ms: self.latency_budget_ms,
+                    active_clip_variant: self.snapshot.active_clip_variant,
+                    has_flowalyzed_clip: self.snapshot.active_clip_variant
+                        == ClipVariant::Flowalyzed,
                 };
                 let output = strip.show(ui);
                 actions.merge(output.into());
@@ -138,6 +141,7 @@ impl SessionApp {
             }
             self.show_selection_info(ui);
             self.show_recipe_summary(ui);
+            self.show_clip_metadata(ui);
         });
     }
 
@@ -169,6 +173,15 @@ impl SessionApp {
         }
     }
 
+    fn show_clip_metadata(&self, ui: &mut egui::Ui) {
+        if self.snapshot.active_clip_variant == ClipVariant::Flowalyzed {
+            ui.colored_label(
+                egui::Color32::from_rgb(100, 150, 255),
+                "Flowalyzed clip is active",
+            );
+        }
+    }
+
     fn handle_shortcuts(&self, ctx: &egui::Context) -> ControlActions {
         let mut actions = ControlActions::default();
         ctx.input(|input| {
@@ -191,6 +204,11 @@ impl SessionApp {
         }
         if actions.stop_replay {
             self.stop_replay();
+        }
+        if let Some(variant) = actions.toggle_to_variant {
+            if let Err(err) = self.controller.toggle_clip_variant(variant) {
+                self.control_error = Some(err.to_string());
+            }
         }
     }
 
@@ -406,6 +424,7 @@ struct ControlActions {
     toggle_recording: bool,
     replay_reference: bool,
     stop_replay: bool,
+    toggle_to_variant: Option<ClipVariant>,
 }
 
 impl ControlActions {
@@ -413,6 +432,9 @@ impl ControlActions {
         self.toggle_recording |= other.toggle_recording;
         self.replay_reference |= other.replay_reference;
         self.stop_replay |= other.stop_replay;
+        if other.toggle_to_variant.is_some() {
+            self.toggle_to_variant = other.toggle_to_variant;
+        }
     }
 }
 
@@ -422,6 +444,7 @@ impl From<ControlStripOutput> for ControlActions {
             toggle_recording: output.toggle_recording,
             replay_reference: output.replay_reference,
             stop_replay: output.stop_replay,
+            toggle_to_variant: output.toggle_to_variant,
         }
     }
 }

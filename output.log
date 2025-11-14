@@ -1,0 +1,590 @@
+[2m2025-11-14T03:19:35.616257Z[0m [32m INFO[0m pronunciation CLI parsed
+[2m2025-11-14T03:19:35.616311Z[0m [32m INFO[0m handling session command [3margs[0m[2m=[0mSessionArgs { pipeline: PipelineArgs { reference: "easy_arabic_539_out_chunks/chunk_0001/processed.wav", capture: CaptureArgs { device: None, latency_min: None, latency_max: None, sample_rate: 16000 }, assets_path: None, latency_budget_ms: 200 } }
+[2m2025-11-14T03:19:35.616484Z[0m [32m INFO[0m resolved assets root [3massets_root[0m[2m=[0m/Users/demouser/Code/flowalyzer/assets
+[2m2025-11-14T03:19:35.616948Z[0m [32m INFO[0m loaded alignment weights [3mmfcc[0m[2m=[0m0.30000001192092896 [3mdelta[0m[2m=[0m0.15000000596046448 [3mdelta_delta[0m[2m=[0m0.05000000074505806 [3mmel[0m[2m=[0m0.10000000149011612 [3menergy[0m[2m=[0m0.15000000596046448 [3mflux[0m[2m=[0m0.05000000074505806 [3mpitch[0m[2m=[0m0.20000000298023224
+[2m2025-11-14T03:19:35.616999Z[0m [32m INFO[0m configured capture settings [3mdevice[0m[2m=[0mNone [3msample_rate[0m[2m=[0m16000 [3mlatency_ms[0m[2m=[0m100..=200
+[2m2025-11-14T03:19:35.617066Z[0m [32m INFO[0m built session config [3mreference[0m[2m=[0measy_arabic_539_out_chunks/chunk_0001/processed.wav [3mlatency_budget_ms[0m[2m=[0m200
+[2m2025-11-14T03:19:35.617111Z[0m [32m INFO[0m session config validated; creating runtime [3mreference[0m[2m=[0measy_arabic_539_out_chunks/chunk_0001/processed.wav [3massets_root[0m[2m=[0m/Users/demouser/Code/flowalyzer/assets [3mlatency_budget_ms[0m[2m=[0m200 [3mui_enabled[0m[2m=[0mtrue
+[2m2025-11-14T03:19:35.617128Z[0m [32m INFO[0m session config validated; launching runtime thread [3mreference[0m[2m=[0measy_arabic_539_out_chunks/chunk_0001/processed.wav [3mlatency_budget_ms[0m[2m=[0m200
+[2m2025-11-14T03:19:35.617229Z[0m [32m INFO[0m session runtime thread spawned; waiting for complete snapshot
+[2m2025-11-14T03:19:35.617272Z[0m [32m INFO[0m runtime thread started; sending initializing snapshot
+[2m2025-11-14T03:19:35.617346Z[0m [32m INFO[0m received initializing snapshot; waiting for complete snapshot
+[2m2025-11-14T03:19:35.617360Z[0m [32m INFO[0m loading reference WAV file [3mpath[0m[2m=[0measy_arabic_539_out_chunks/chunk_0001/processed.wav
+[2m2025-11-14T03:19:35.819851Z[0m [32m INFO[0m reference WAV loaded successfully [3mduration_secs[0m[2m=[0m63.789875 [3msample_rate[0m[2m=[0m16000 [3msamples[0m[2m=[0m1020638
+[2m2025-11-14T03:19:35.819877Z[0m [32m INFO[0m creating live capture source [3mdevice[0m[2m=[0mNone [3msample_rate[0m[2m=[0m16000 [3mlatency_ms[0m[2m=[0m100..=200
+[2m2025-11-14T03:19:35.819884Z[0m [32m INFO[0m creating session engine (this will extract features from reference)
+[2m2025-11-14T03:19:35.819909Z[0m [32m INFO[0m starting feature extraction for reference audio [3msamples[0m[2m=[0m1020638 [3mduration_secs[0m[2m=[0m63.789875
+[2m2025-11-14T03:19:35.819917Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:19:35.819925Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:19:35.820143Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m0.000213917 [3msamples[0m[2m=[0m1020638
+[2m2025-11-14T03:19:35.820148Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:19:35.825974Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m0.005820375
+[2m2025-11-14T03:19:35.825981Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m1020638
+[2m2025-11-14T03:19:35.854827Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.028825292 [3mstft_frames[0m[2m=[0m6378
+[2m2025-11-14T03:19:35.854848Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:19:35.882238Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m0.027377708
+[2m2025-11-14T03:19:35.882252Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:19:35.925984Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.043722584
+[2m2025-11-14T03:19:35.925996Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:19:35.926048Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m4.6167e-5
+[2m2025-11-14T03:19:35.926054Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:19:35.928872Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m0.002811875 [3mmel_frames[0m[2m=[0m6378
+[2m2025-11-14T03:19:35.929857Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.109935375 [3mmel_frames[0m[2m=[0m6378
+[2m2025-11-14T03:19:35.929863Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:19:36.074858Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.144978334
+[2m2025-11-14T03:19:36.074877Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m6378
+[2m2025-11-14T03:19:36.074883Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:19:36.075252Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m0.000364292 [3msamples[0m[2m=[0m1020638
+[2m2025-11-14T03:19:36.075258Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:19:36.080449Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m0.00518125
+[2m2025-11-14T03:19:36.080463Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m1020638 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:20:35.871563Z[0m [31mERROR[0m timeout waiting for complete snapshot from runtime thread
+[2m2025-11-14T03:21:04.618354Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m88.538989667 [3mpitch_frames[0m[2m=[0m10207
+[2m2025-11-14T03:21:04.618376Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:04.619520Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m0.001137625
+[2m2025-11-14T03:21:04.619528Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:04.619837Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m0.000306375
+[2m2025-11-14T03:21:04.619842Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:04.620341Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m0.00049625
+[2m2025-11-14T03:21:04.620345Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:04.620520Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m0.000171584 [3maligned_frames[0m[2m=[0m6378
+[2m2025-11-14T03:21:04.620858Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m88.54709425 [3mpitch_frames[0m[2m=[0m6378
+[2m2025-11-14T03:21:04.624775Z[0m [32m INFO[0m feature extraction completed [3melapsed_secs[0m[2m=[0m88.805979 [3menergy_frames[0m[2m=[0m6378 [3mpitch_frames[0m[2m=[0m6378
+[2m2025-11-14T03:21:06.376783Z[0m [32m INFO[0m session engine created successfully [3melapsed_secs[0m[2m=[0m90.558026292
+[2m2025-11-14T03:21:06.376809Z[0m [32m INFO[0m computing initial reference alignment
+[2m2025-11-14T03:21:06.376846Z[0m [32m INFO[0m initial reference alignment computed [3melapsed_secs[0m[2m=[0m3.2375e-5 [3mphonemes[0m[2m=[0m355
+[2m2025-11-14T03:21:06.376853Z[0m [32m INFO[0m engine runner built; ready to send initial snapshot [3mtotal_elapsed_secs[0m[2m=[0m90.55810975
+[2m2025-11-14T03:21:06.376881Z[0m [32m INFO[0m session runtime thread running; emitting initial snapshot
+[2m2025-11-14T03:21:12.093932Z[0m [32m INFO[0m received start command
+[2m2025-11-14T03:21:12.093968Z[0m [32m INFO[0m recording session starting
+[2m2025-11-14T03:21:12.093972Z[0m [32m INFO[0m starting capture stream
+[2m2025-11-14T03:21:12.093976Z[0m [32m INFO[0m starting live capture stream [3mdevice[0m[2m=[0mNone [3msample_rate[0m[2m=[0m16000 [3mlatency_ms[0m[2m=[0m100..=200
+[2m2025-11-14T03:21:12.231034Z[0m [32m INFO[0m capture stream started successfully [3msample_rate[0m[2m=[0m48000
+[2m2025-11-14T03:21:12.231132Z[0m [32m INFO[0m starting reference playback
+[2m2025-11-14T03:21:12.253485Z[0m [32m INFO[0m recording session active; entering drive loop
+[2m2025-11-14T03:21:12.337340Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:12.337365Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:12.337370Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m1.333e-6 [3msamples[0m[2m=[0m1710
+[2m2025-11-14T03:21:12.337377Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:12.337391Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.1375e-5
+[2m2025-11-14T03:21:12.337394Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m1710
+[2m2025-11-14T03:21:12.337478Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m7.9458e-5 [3mstft_frames[0m[2m=[0m10
+[2m2025-11-14T03:21:12.337483Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:12.337540Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m5.375e-5
+[2m2025-11-14T03:21:12.337544Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:12.337626Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m8.0458e-5
+[2m2025-11-14T03:21:12.337631Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:12.337648Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.3541e-5
+[2m2025-11-14T03:21:12.337652Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:12.337659Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m4.75e-6 [3mmel_frames[0m[2m=[0m10
+[2m2025-11-14T03:21:12.337665Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000300917 [3mmel_frames[0m[2m=[0m10
+[2m2025-11-14T03:21:12.337669Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:12.337962Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000289291
+[2m2025-11-14T03:21:12.337968Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m10
+[2m2025-11-14T03:21:12.337972Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:12.337975Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m5e-7 [3msamples[0m[2m=[0m1710
+[2m2025-11-14T03:21:12.337979Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:12.337990Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m8.916e-6
+[2m2025-11-14T03:21:12.337994Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m1710 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:12.492824Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.154821584 [3mpitch_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:12.492839Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:12.492847Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.167e-6
+[2m2025-11-14T03:21:12.492851Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:12.492860Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m6.333e-6
+[2m2025-11-14T03:21:12.492863Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:12.492868Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.375e-6
+[2m2025-11-14T03:21:12.492871Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:12.492876Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m1.833e-6 [3maligned_frames[0m[2m=[0m10
+[2m2025-11-14T03:21:12.492886Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.154916167 [3mpitch_frames[0m[2m=[0m10
+[2m2025-11-14T03:21:12.495199Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:12.495205Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:12.495208Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.25e-7 [3msamples[0m[2m=[0m1881
+[2m2025-11-14T03:21:12.495213Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:12.495227Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.175e-5
+[2m2025-11-14T03:21:12.495231Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m1881
+[2m2025-11-14T03:21:12.495307Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m7.1792e-5 [3mstft_frames[0m[2m=[0m11
+[2m2025-11-14T03:21:12.495311Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:12.495363Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m4.8958e-5
+[2m2025-11-14T03:21:12.495366Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:12.495452Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m8.35e-5
+[2m2025-11-14T03:21:12.495456Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:12.495471Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.1792e-5
+[2m2025-11-14T03:21:12.495476Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:12.495482Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m4.083e-6 [3mmel_frames[0m[2m=[0m11
+[2m2025-11-14T03:21:12.495489Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000284666 [3mmel_frames[0m[2m=[0m11
+[2m2025-11-14T03:21:12.495494Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:12.495782Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.00028475
+[2m2025-11-14T03:21:12.495787Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m11
+[2m2025-11-14T03:21:12.495791Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:12.495795Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m4.59e-7 [3msamples[0m[2m=[0m1881
+[2m2025-11-14T03:21:12.495799Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:12.495812Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m9.5e-6
+[2m2025-11-14T03:21:12.495815Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m1881 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:12.658464Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.162641041 [3mpitch_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:12.658475Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:12.658482Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m4e-6
+[2m2025-11-14T03:21:12.658486Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:12.658492Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m3.041e-6
+[2m2025-11-14T03:21:12.658495Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:12.658499Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m1.5e-6
+[2m2025-11-14T03:21:12.658502Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:12.658507Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m8.75e-7 [3maligned_frames[0m[2m=[0m11
+[2m2025-11-14T03:21:12.658517Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.162728042 [3mpitch_frames[0m[2m=[0m11
+[2m2025-11-14T03:21:12.661024Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:12.661030Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:12.661034Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m5.42e-7 [3msamples[0m[2m=[0m2052
+[2m2025-11-14T03:21:12.661038Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:12.661055Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.3917e-5
+[2m2025-11-14T03:21:12.661059Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2052
+[2m2025-11-14T03:21:12.661132Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m6.825e-5 [3mstft_frames[0m[2m=[0m12
+[2m2025-11-14T03:21:12.661137Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:12.661183Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m4.375e-5
+[2m2025-11-14T03:21:12.661187Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:12.661283Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m9.2959e-5
+[2m2025-11-14T03:21:12.661287Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:12.661300Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.0417e-5
+[2m2025-11-14T03:21:12.661304Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:12.661313Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m5.584e-6 [3mmel_frames[0m[2m=[0m12
+[2m2025-11-14T03:21:12.661321Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000291125 [3mmel_frames[0m[2m=[0m12
+[2m2025-11-14T03:21:12.661325Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:12.661625Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000296375
+[2m2025-11-14T03:21:12.661629Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m12
+[2m2025-11-14T03:21:12.661633Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:12.661637Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m4.59e-7 [3msamples[0m[2m=[0m2052
+[2m2025-11-14T03:21:12.661641Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:12.661657Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.2583e-5
+[2m2025-11-14T03:21:12.661661Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2052 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:12.841419Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.179751084 [3mpitch_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:12.841431Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:12.841442Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3.208e-6
+[2m2025-11-14T03:21:12.841446Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:12.841452Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m3.125e-6
+[2m2025-11-14T03:21:12.841455Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:12.841459Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m1.625e-6
+[2m2025-11-14T03:21:12.841463Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:12.841467Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m7.92e-7 [3maligned_frames[0m[2m=[0m12
+[2m2025-11-14T03:21:12.841476Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.179845459 [3mpitch_frames[0m[2m=[0m12
+[2m2025-11-14T03:21:12.844176Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:12.844181Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:12.844185Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m7.08e-7 [3msamples[0m[2m=[0m2223
+[2m2025-11-14T03:21:12.844190Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:12.844207Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.5208e-5
+[2m2025-11-14T03:21:12.844212Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2223
+[2m2025-11-14T03:21:12.844293Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m7.6666e-5 [3mstft_frames[0m[2m=[0m13
+[2m2025-11-14T03:21:12.844297Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:12.844338Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m3.7625e-5
+[2m2025-11-14T03:21:12.844342Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:12.844443Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m9.8291e-5
+[2m2025-11-14T03:21:12.844447Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:12.844460Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1e-5
+[2m2025-11-14T03:21:12.844464Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:12.844473Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m6.125e-6 [3mmel_frames[0m[2m=[0m13
+[2m2025-11-14T03:21:12.844480Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.00029875 [3mmel_frames[0m[2m=[0m13
+[2m2025-11-14T03:21:12.844484Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:12.844814Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000326209
+[2m2025-11-14T03:21:12.844819Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m13
+[2m2025-11-14T03:21:12.844822Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:12.844826Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m5.83e-7 [3msamples[0m[2m=[0m2223
+[2m2025-11-14T03:21:12.844831Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:12.844847Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.3333e-5
+[2m2025-11-14T03:21:12.844851Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2223 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:13.041438Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.196579334 [3mpitch_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:13.041449Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:13.041455Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3e-6
+[2m2025-11-14T03:21:13.041459Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:13.041464Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m2.541e-6
+[2m2025-11-14T03:21:13.041468Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:13.041472Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m1.833e-6
+[2m2025-11-14T03:21:13.041475Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:13.041480Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m8.33e-7 [3maligned_frames[0m[2m=[0m13
+[2m2025-11-14T03:21:13.041488Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.196668167 [3mpitch_frames[0m[2m=[0m13
+[2m2025-11-14T03:21:13.044426Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m200.24220275878906 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:13.044454Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:13.044459Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:13.044462Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.67e-7 [3msamples[0m[2m=[0m2394
+[2m2025-11-14T03:21:13.044466Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:13.044482Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.2917e-5
+[2m2025-11-14T03:21:13.044485Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2394
+[2m2025-11-14T03:21:13.044563Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m7.4542e-5 [3mstft_frames[0m[2m=[0m14
+[2m2025-11-14T03:21:13.044568Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:13.044606Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m3.4917e-5
+[2m2025-11-14T03:21:13.044611Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:13.044731Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000116833
+[2m2025-11-14T03:21:13.044735Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:13.044748Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.0208e-5
+[2m2025-11-14T03:21:13.044752Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:13.044761Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m6.167e-6 [3mmel_frames[0m[2m=[0m14
+[2m2025-11-14T03:21:13.044768Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000309875 [3mmel_frames[0m[2m=[0m14
+[2m2025-11-14T03:21:13.044773Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:13.045118Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000341708
+[2m2025-11-14T03:21:13.045123Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m14
+[2m2025-11-14T03:21:13.045127Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:13.045131Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m4.58e-7 [3msamples[0m[2m=[0m2394
+[2m2025-11-14T03:21:13.045135Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:13.045152Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.4375e-5
+[2m2025-11-14T03:21:13.045156Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2394 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:13.249987Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.204823375 [3mpitch_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:13.249999Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:13.250005Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3.708e-6
+[2m2025-11-14T03:21:13.250010Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:13.250015Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m2.917e-6
+[2m2025-11-14T03:21:13.250019Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:13.250023Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.208e-6
+[2m2025-11-14T03:21:13.250026Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:13.250029Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m7.09e-7 [3maligned_frames[0m[2m=[0m14
+[2m2025-11-14T03:21:13.250038Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.204914 [3mpitch_frames[0m[2m=[0m14
+[2m2025-11-14T03:21:13.253290Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m208.8391571044922 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:13.253319Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:13.253323Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:13.253327Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.66e-7 [3msamples[0m[2m=[0m2565
+[2m2025-11-14T03:21:13.253331Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:13.253349Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.5083e-5
+[2m2025-11-14T03:21:13.253353Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2565
+[2m2025-11-14T03:21:13.253439Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m8.1334e-5 [3mstft_frames[0m[2m=[0m15
+[2m2025-11-14T03:21:13.253444Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:13.253484Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m3.6958e-5
+[2m2025-11-14T03:21:13.253488Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:13.253616Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000125208
+[2m2025-11-14T03:21:13.253620Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:13.253631Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m8.75e-6
+[2m2025-11-14T03:21:13.253635Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:13.253643Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m6.125e-6 [3mmel_frames[0m[2m=[0m15
+[2m2025-11-14T03:21:13.253652Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000328042 [3mmel_frames[0m[2m=[0m15
+[2m2025-11-14T03:21:13.253656Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:13.254029Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000369833
+[2m2025-11-14T03:21:13.254034Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m15
+[2m2025-11-14T03:21:13.254038Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:13.254042Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m5e-7 [3msamples[0m[2m=[0m2565
+[2m2025-11-14T03:21:13.254046Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:13.254064Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.5459e-5
+[2m2025-11-14T03:21:13.254068Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2565 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:13.475797Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.221722542 [3mpitch_frames[0m[2m=[0m26
+[2m2025-11-14T03:21:13.475809Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:13.475816Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3.833e-6
+[2m2025-11-14T03:21:13.475820Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:13.475825Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m2.541e-6
+[2m2025-11-14T03:21:13.475828Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:13.475832Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m1.875e-6
+[2m2025-11-14T03:21:13.475835Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:13.475838Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m6.66e-7 [3maligned_frames[0m[2m=[0m15
+[2m2025-11-14T03:21:13.475847Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.221812208 [3mpitch_frames[0m[2m=[0m15
+[2m2025-11-14T03:21:13.479239Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m225.92312622070313 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:13.479266Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:13.479269Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:13.479273Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.67e-7 [3msamples[0m[2m=[0m2736
+[2m2025-11-14T03:21:13.479277Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:13.479296Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.5666e-5
+[2m2025-11-14T03:21:13.479299Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2736
+[2m2025-11-14T03:21:13.479388Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m8.5125e-5 [3mstft_frames[0m[2m=[0m16
+[2m2025-11-14T03:21:13.479392Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:13.479437Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m4.1959e-5
+[2m2025-11-14T03:21:13.479441Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:13.479526Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m8.2333e-5
+[2m2025-11-14T03:21:13.479530Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:13.479543Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.0208e-5
+[2m2025-11-14T03:21:13.479547Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:13.479557Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m7.166e-6 [3mmel_frames[0m[2m=[0m16
+[2m2025-11-14T03:21:13.479564Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000294916 [3mmel_frames[0m[2m=[0m16
+[2m2025-11-14T03:21:13.479568Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:13.479958Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000387792
+[2m2025-11-14T03:21:13.479963Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m16
+[2m2025-11-14T03:21:13.479967Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:13.479971Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m6.25e-7 [3msamples[0m[2m=[0m2736
+[2m2025-11-14T03:21:13.479975Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:13.479994Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.5792e-5
+[2m2025-11-14T03:21:13.479998Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2736 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:13.720376Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.24037175 [3mpitch_frames[0m[2m=[0m28
+[2m2025-11-14T03:21:13.720392Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:13.720398Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3.709e-6
+[2m2025-11-14T03:21:13.720402Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:13.720407Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m2.75e-6
+[2m2025-11-14T03:21:13.720411Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:13.720416Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.042e-6
+[2m2025-11-14T03:21:13.720418Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:13.720422Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m7.5e-7 [3maligned_frames[0m[2m=[0m16
+[2m2025-11-14T03:21:13.720430Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.240466291 [3mpitch_frames[0m[2m=[0m16
+[2m2025-11-14T03:21:13.724087Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m244.8245391845703 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:13.724116Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:13.724120Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:13.724124Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.25e-7 [3msamples[0m[2m=[0m2907
+[2m2025-11-14T03:21:13.724129Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:13.724146Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.5459e-5
+[2m2025-11-14T03:21:13.724150Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m2907
+[2m2025-11-14T03:21:13.724242Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m8.7959e-5 [3mstft_frames[0m[2m=[0m17
+[2m2025-11-14T03:21:13.724246Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:13.724291Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m4.1833e-5
+[2m2025-11-14T03:21:13.724295Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:13.724438Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000140792
+[2m2025-11-14T03:21:13.724443Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:13.724456Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m9.625e-6
+[2m2025-11-14T03:21:13.724460Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:13.724471Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m7.667e-6 [3mmel_frames[0m[2m=[0m17
+[2m2025-11-14T03:21:13.724478Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000357791 [3mmel_frames[0m[2m=[0m17
+[2m2025-11-14T03:21:13.724482Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:13.724925Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.00043825
+[2m2025-11-14T03:21:13.724929Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m17
+[2m2025-11-14T03:21:13.724933Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:13.724938Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m8.33e-7 [3msamples[0m[2m=[0m2907
+[2m2025-11-14T03:21:13.724941Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:13.724962Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.7583e-5
+[2m2025-11-14T03:21:13.724967Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m2907 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:13.981304Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.256331084 [3mpitch_frames[0m[2m=[0m30
+[2m2025-11-14T03:21:13.981315Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:13.981321Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m3e-6
+[2m2025-11-14T03:21:13.981325Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:13.981331Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m2.708e-6
+[2m2025-11-14T03:21:13.981334Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:13.981338Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.125e-6
+[2m2025-11-14T03:21:13.981342Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:13.981347Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m7.5e-7 [3maligned_frames[0m[2m=[0m17
+[2m2025-11-14T03:21:13.981354Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.256423833 [3mpitch_frames[0m[2m=[0m17
+[2m2025-11-14T03:21:13.985130Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m261.0184326171875 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:13.985156Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:13.985161Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:13.985164Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m8.34e-7 [3msamples[0m[2m=[0m3078
+[2m2025-11-14T03:21:13.985169Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:13.985202Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.8125e-5
+[2m2025-11-14T03:21:13.985211Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3078
+[2m2025-11-14T03:21:13.985323Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000106584 [3mstft_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:13.985329Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:13.985428Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m9.5542e-5
+[2m2025-11-14T03:21:13.985432Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:13.985580Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000144917
+[2m2025-11-14T03:21:13.985584Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:13.985600Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.3e-5
+[2m2025-11-14T03:21:13.985605Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:13.985618Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m1.0208e-5 [3mmel_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:13.985625Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.00046425 [3mmel_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:13.985628Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:13.986049Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000418041
+[2m2025-11-14T03:21:13.986055Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m18
+[2m2025-11-14T03:21:13.986058Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:13.986062Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m5.83e-7 [3msamples[0m[2m=[0m3078
+[2m2025-11-14T03:21:13.986066Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:13.986088Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.9375e-5
+[2m2025-11-14T03:21:13.986092Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3078 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:14.251130Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.26502725 [3mpitch_frames[0m[2m=[0m31
+[2m2025-11-14T03:21:14.251155Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:14.251164Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.084e-6
+[2m2025-11-14T03:21:14.251167Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:14.251173Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m3.666e-6
+[2m2025-11-14T03:21:14.251176Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:14.251180Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.25e-6
+[2m2025-11-14T03:21:14.251183Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:14.251187Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m1.209e-6 [3maligned_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:14.251200Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.265144541 [3mpitch_frames[0m[2m=[0m18
+[2m2025-11-14T03:21:14.255198Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m270.0455322265625 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:14.255232Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:14.255236Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:14.255244Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m5.042e-6 [3msamples[0m[2m=[0m3249
+[2m2025-11-14T03:21:14.255249Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:14.255274Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m2.2208e-5
+[2m2025-11-14T03:21:14.255278Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3249
+[2m2025-11-14T03:21:14.255397Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000113583 [3mstft_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:14.255402Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:14.255523Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m0.000118583
+[2m2025-11-14T03:21:14.255528Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:14.255690Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000158542
+[2m2025-11-14T03:21:14.255694Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:14.255708Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.075e-5
+[2m2025-11-14T03:21:14.255712Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:14.255722Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m8.041e-6 [3mmel_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:14.255730Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000494125 [3mmel_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:14.255733Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:14.256225Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000488708
+[2m2025-11-14T03:21:14.256230Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m19
+[2m2025-11-14T03:21:14.256233Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:14.256238Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m1e-6 [3msamples[0m[2m=[0m3249
+[2m2025-11-14T03:21:14.256241Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:14.256261Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.7167e-5
+[2m2025-11-14T03:21:14.256266Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3249 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:14.537325Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.281052958 [3mpitch_frames[0m[2m=[0m33
+[2m2025-11-14T03:21:14.537340Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:14.537349Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.042e-6
+[2m2025-11-14T03:21:14.537353Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:14.537360Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m3.75e-6
+[2m2025-11-14T03:21:14.537363Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:14.537368Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.625e-6
+[2m2025-11-14T03:21:14.537371Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:14.537374Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m1e-6 [3maligned_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:14.537385Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.28115475 [3mpitch_frames[0m[2m=[0m19
+[2m2025-11-14T03:21:14.541916Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m286.6886901855469 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:14.541951Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:14.541955Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:14.541959Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m9.17e-7 [3msamples[0m[2m=[0m3420
+[2m2025-11-14T03:21:14.541962Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:14.541983Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.875e-5
+[2m2025-11-14T03:21:14.541987Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3420
+[2m2025-11-14T03:21:14.542096Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000105209 [3mstft_frames[0m[2m=[0m20
+[2m2025-11-14T03:21:14.542100Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:14.542188Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m8.4834e-5
+[2m2025-11-14T03:21:14.542192Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:14.542297Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000101958
+[2m2025-11-14T03:21:14.542300Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:14.542314Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.0792e-5
+[2m2025-11-14T03:21:14.542318Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:14.542329Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m8e-6 [3mmel_frames[0m[2m=[0m20
+[2m2025-11-14T03:21:14.542336Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000381791 [3mmel_frames[0m[2m=[0m20
+[2m2025-11-14T03:21:14.542340Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:14.542827Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000483333
+[2m2025-11-14T03:21:14.542832Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m20
+[2m2025-11-14T03:21:14.542836Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:14.542840Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m5e-7 [3msamples[0m[2m=[0m3420
+[2m2025-11-14T03:21:14.542844Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:14.542865Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.7958e-5
+[2m2025-11-14T03:21:14.542869Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3420 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:14.840624Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.297743875 [3mpitch_frames[0m[2m=[0m35
+[2m2025-11-14T03:21:14.840644Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:14.840654Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.666e-6
+[2m2025-11-14T03:21:14.840658Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:14.840665Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m4.209e-6
+[2m2025-11-14T03:21:14.840669Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:14.840675Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.75e-6
+[2m2025-11-14T03:21:14.840678Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:14.840683Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m1.167e-6 [3maligned_frames[0m[2m=[0m20
+[2m2025-11-14T03:21:14.840696Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.297863333 [3mpitch_frames[0m[2m=[0m20
+[2m2025-11-14T03:21:14.845236Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m303.2899475097656 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:14.845271Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:14.845276Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:14.845279Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m6.25e-7 [3msamples[0m[2m=[0m3591
+[2m2025-11-14T03:21:14.845283Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:14.845305Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m1.9875e-5
+[2m2025-11-14T03:21:14.845309Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3591
+[2m2025-11-14T03:21:14.845424Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000111292 [3mstft_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:14.845429Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:14.845521Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m8.9875e-5
+[2m2025-11-14T03:21:14.845525Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:14.845695Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000167125
+[2m2025-11-14T03:21:14.845699Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:14.845714Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.1458e-5
+[2m2025-11-14T03:21:14.845718Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:14.845730Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m9.166e-6 [3mmel_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:14.845738Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000462791 [3mmel_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:14.845743Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:14.846254Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.00050825
+[2m2025-11-14T03:21:14.846259Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m21
+[2m2025-11-14T03:21:14.846263Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:14.846267Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m6.67e-7 [3msamples[0m[2m=[0m3591
+[2m2025-11-14T03:21:14.846272Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:14.846296Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m2.1792e-5
+[2m2025-11-14T03:21:14.846301Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3591 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:15.157388Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.311080833 [3mpitch_frames[0m[2m=[0m36
+[2m2025-11-14T03:21:15.157401Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:15.157409Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.042e-6
+[2m2025-11-14T03:21:15.157414Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:15.157420Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m3.459e-6
+[2m2025-11-14T03:21:15.157423Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:15.157428Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.417e-6
+[2m2025-11-14T03:21:15.157431Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:15.157434Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m8.75e-7 [3maligned_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:15.157443Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.311184375 [3mpitch_frames[0m[2m=[0m21
+[2m2025-11-14T03:21:15.162549Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m317.2825012207031 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:15.162583Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:15.162587Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:15.162595Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m4.833e-6 [3msamples[0m[2m=[0m3762
+[2m2025-11-14T03:21:15.162598Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:15.162621Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m2.0792e-5
+[2m2025-11-14T03:21:15.162625Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3762
+[2m2025-11-14T03:21:15.162745Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.00011625 [3mstft_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:15.162750Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:15.162834Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m8.1416e-5
+[2m2025-11-14T03:21:15.162838Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:15.163023Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000181833
+[2m2025-11-14T03:21:15.163027Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:15.163040Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.025e-5
+[2m2025-11-14T03:21:15.163044Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:15.163058Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m1.0375e-5 [3mmel_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:15.163065Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.00047875 [3mmel_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:15.163069Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:15.163615Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000543
+[2m2025-11-14T03:21:15.163620Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m23
+[2m2025-11-14T03:21:15.163624Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:15.163628Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m7.5e-7 [3msamples[0m[2m=[0m3762
+[2m2025-11-14T03:21:15.163632Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:15.163654Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m1.9333e-5
+[2m2025-11-14T03:21:15.163658Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3762 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:15.491266Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.327598375 [3mpitch_frames[0m[2m=[0m38
+[2m2025-11-14T03:21:15.491285Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:15.491293Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m4.875e-6
+[2m2025-11-14T03:21:15.491297Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:15.491303Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m4.041e-6
+[2m2025-11-14T03:21:15.491307Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:15.491312Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.666e-6
+[2m2025-11-14T03:21:15.491315Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:15.491318Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m9.58e-7 [3maligned_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:15.491328Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.3277085 [3mpitch_frames[0m[2m=[0m23
+[2m2025-11-14T03:21:15.496939Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m334.3611755371094 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:15.496979Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:15.496983Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:15.496987Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m9.17e-7 [3msamples[0m[2m=[0m3933
+[2m2025-11-14T03:21:15.496991Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:15.497015Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m2.1625e-5
+[2m2025-11-14T03:21:15.497019Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m3933
+[2m2025-11-14T03:21:15.497147Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000124166 [3mstft_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:15.497152Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:15.497259Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m0.000104042
+[2m2025-11-14T03:21:15.497263Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:15.497452Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000185833
+[2m2025-11-14T03:21:15.497456Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:15.497470Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.1375e-5
+[2m2025-11-14T03:21:15.497474Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:15.497487Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m9.083e-6 [3mmel_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:15.497494Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000511 [3mmel_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:15.497499Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:15.498074Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000572542
+[2m2025-11-14T03:21:15.498079Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m24
+[2m2025-11-14T03:21:15.498083Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:15.498087Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m7.5e-7 [3msamples[0m[2m=[0m3933
+[2m2025-11-14T03:21:15.498091Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:15.498116Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m2.1375e-5
+[2m2025-11-14T03:21:15.498120Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m3933 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:15.842249Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.344119959 [3mpitch_frames[0m[2m=[0m40
+[2m2025-11-14T03:21:15.842263Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:15.842270Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m4.083e-6
+[2m2025-11-14T03:21:15.842273Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:15.842280Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m4.417e-6
+[2m2025-11-14T03:21:15.842284Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:15.842289Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.709e-6
+[2m2025-11-14T03:21:15.842291Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:15.842295Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m9.17e-7 [3maligned_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:15.842305Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.344226 [3mpitch_frames[0m[2m=[0m24
+[2m2025-11-14T03:21:15.848069Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m351.0956115722656 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:15.848100Z[0m [32m INFO[0m computing spectrograms
+[2m2025-11-14T03:21:15.848104Z[0m [32m INFO[0m ensuring sample rate
+[2m2025-11-14T03:21:15.848108Z[0m [32m INFO[0m sample rate ensured [3melapsed_secs[0m[2m=[0m1.125e-6 [3msamples[0m[2m=[0m4104
+[2m2025-11-14T03:21:15.848112Z[0m [32m INFO[0m converting to f64
+[2m2025-11-14T03:21:15.848137Z[0m [32m INFO[0m conversion to f64 complete [3melapsed_secs[0m[2m=[0m2.225e-5
+[2m2025-11-14T03:21:15.848140Z[0m [32m INFO[0m computing STFT [3mfft_size[0m[2m=[0m400 [3mhop_size[0m[2m=[0m160 [3maudio_samples[0m[2m=[0m4104
+[2m2025-11-14T03:21:15.848270Z[0m [32m INFO[0m STFT computed [3melapsed_secs[0m[2m=[0m0.000125334 [3mstft_frames[0m[2m=[0m25
+[2m2025-11-14T03:21:15.848274Z[0m [32m INFO[0m converting STFT to polar
+[2m2025-11-14T03:21:15.848366Z[0m [32m INFO[0m STFT converted to polar [3melapsed_secs[0m[2m=[0m8.9208e-5
+[2m2025-11-14T03:21:15.848370Z[0m [32m INFO[0m computing power spectrogram
+[2m2025-11-14T03:21:15.848570Z[0m [32m INFO[0m power spectrogram computed [3melapsed_secs[0m[2m=[0m0.000196958
+[2m2025-11-14T03:21:15.848573Z[0m [32m INFO[0m computing mel filterbank
+[2m2025-11-14T03:21:15.848587Z[0m [32m INFO[0m mel filterbank computed [3melapsed_secs[0m[2m=[0m1.0833e-5
+[2m2025-11-14T03:21:15.848591Z[0m [32m INFO[0m computing mel spectrogram
+[2m2025-11-14T03:21:15.848605Z[0m [32m INFO[0m mel spectrogram computed [3melapsed_secs[0m[2m=[0m1.1e-5 [3mmel_frames[0m[2m=[0m25
+[2m2025-11-14T03:21:15.848670Z[0m [32m INFO[0m spectrograms computed [3melapsed_secs[0m[2m=[0m0.000566458 [3mmel_frames[0m[2m=[0m25
+[2m2025-11-14T03:21:15.848675Z[0m [32m INFO[0m assembling feature matrices
+[2m2025-11-14T03:21:15.849285Z[0m [32m INFO[0m feature matrices assembled [3melapsed_secs[0m[2m=[0m0.000606083
+[2m2025-11-14T03:21:15.849294Z[0m [32m INFO[0m extracting pitch contour [3mframe_count[0m[2m=[0m25
+[2m2025-11-14T03:21:15.849298Z[0m [32m INFO[0m ensuring sample rate for pitch extraction
+[2m2025-11-14T03:21:15.849303Z[0m [32m INFO[0m sample rate ensured for pitch [3melapsed_secs[0m[2m=[0m7.08e-7 [3msamples[0m[2m=[0m4104
+[2m2025-11-14T03:21:15.849307Z[0m [32m INFO[0m converting to f64 for pitch
+[2m2025-11-14T03:21:15.849337Z[0m [32m INFO[0m conversion to f64 complete for pitch [3melapsed_secs[0m[2m=[0m2.6625e-5
+[2m2025-11-14T03:21:15.849342Z[0m [32m INFO[0m extracting pitch contour [3mframe_len[0m[2m=[0m400 [3maudio_samples[0m[2m=[0m4104 [3mfreq_min[0m[2m=[0m55.0 [3mfreq_max[0m[2m=[0m1200.0
+[2m2025-11-14T03:21:16.210331Z[0m [32m INFO[0m pitch extraction completed [3melapsed_secs[0m[2m=[0m0.360980208 [3mpitch_frames[0m[2m=[0m42
+[2m2025-11-14T03:21:16.210350Z[0m [32m INFO[0m normalizing pitch contour
+[2m2025-11-14T03:21:16.210359Z[0m [32m INFO[0m pitch contour normalized [3melapsed_secs[0m[2m=[0m5.333e-6
+[2m2025-11-14T03:21:16.210363Z[0m [32m INFO[0m filling missing pitch values
+[2m2025-11-14T03:21:16.210370Z[0m [32m INFO[0m missing pitch values filled [3melapsed_secs[0m[2m=[0m4.334e-6
+[2m2025-11-14T03:21:16.210373Z[0m [32m INFO[0m smoothing pitch contour
+[2m2025-11-14T03:21:16.210379Z[0m [32m INFO[0m pitch contour smoothed [3melapsed_secs[0m[2m=[0m2.958e-6
+[2m2025-11-14T03:21:16.210382Z[0m [32m INFO[0m aligning pitch contour to frames
+[2m2025-11-14T03:21:16.210386Z[0m [32m INFO[0m pitch contour aligned [3melapsed_secs[0m[2m=[0m1e-6 [3maligned_frames[0m[2m=[0m25
+[2m2025-11-14T03:21:16.210396Z[0m [32m INFO[0m pitch contour extracted [3melapsed_secs[0m[2m=[0m0.361102083 [3mpitch_frames[0m[2m=[0m25
+[2m2025-11-14T03:21:16.216520Z[0m [33m WARN[0m latency exceeds budget [3mlatency_ms[0m[2m=[0m368.42510986328125 [3mbudget_ms[0m[2m=[0m200
+[2m2025-11-14T03:21:16.216545Z[0m [32m INFO[0m stop command received
+[2m2025-11-14T03:21:16.216550Z[0m [32m INFO[0m stopping capture stream [3mchunks_processed[0m[2m=[0m24
+[2m2025-11-14T03:21:18.139291Z[0m [32m INFO[0m received shutdown command
+[2m2025-11-14T03:21:18.139330Z[0m [32m INFO[0m session runtime thread exiting

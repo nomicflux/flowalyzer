@@ -152,6 +152,53 @@ fn test_cache_flowalyzed_features() -> Result<()> {
 }
 
 #[test]
+fn test_reference_alignment_contains_phonemes() -> Result<()> {
+    let reference_clip = create_test_clip(440.0, 1.0);
+    let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        false,
+    )?;
+
+    let alignment = engine.reference_alignment(ClipVariant::Original)?;
+    assert!(
+        !alignment.phonemes.is_empty(),
+        "reference alignment should contain phoneme path"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_reference_alignment_contour_band_normalized() -> Result<()> {
+    let reference_clip = create_test_clip(440.0, 1.0);
+    let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
+    let mut engine = SessionEngine::new(
+        reference_clip,
+        AlignmentWeights::default(),
+        200,
+        capture,
+        false,
+    )?;
+
+    let alignment = engine.reference_alignment(ClipVariant::Original)?;
+    assert!(
+        !alignment.contour_band.is_empty(),
+        "contour band should be populated"
+    );
+    assert!(
+        alignment
+            .contour_band
+            .iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(value)),
+        "contour band values must stay within [0, 1]"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_reference_alignment_cached() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, vec![], 0);
