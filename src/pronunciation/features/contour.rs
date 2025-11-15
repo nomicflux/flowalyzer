@@ -75,6 +75,20 @@ where
         if chunk.len() < frame_len {
             break;
         }
+        // CRITICAL: Verify audio values being passed to pitch estimator
+        let chunk_min = chunk.iter().fold(f64::INFINITY, |a, &b| a.min(b));
+        let chunk_max = chunk.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+        let chunk_rms = (chunk.iter().map(|&s| s * s).sum::<f64>() / chunk.len() as f64).sqrt();
+        let chunk_preview: Vec<f64> = chunk.iter().take(10).copied().collect();
+        info!(
+            chunk_start = chunk_start,
+            chunk_len = chunk.len(),
+            chunk_min = chunk_min,
+            chunk_max = chunk_max,
+            chunk_rms = chunk_rms,
+            chunk_preview = ?chunk_preview,
+            "VERIFY: Audio chunk being passed to pitch estimator"
+        );
 
         let (_timestamps, pitches, voiced_flags, _confidence) = analysis::pyin_pitch_estimator(
             chunk,
@@ -116,14 +130,57 @@ where
         phase: FeatureExtractionPhase::PitchContour,
         elapsed_secs,
     });
+    let voiced_count = voiced_flags.iter().filter(|&&v| v).count();
+    let valid_pitches: Vec<f64> = pitches
+        .iter()
+        .zip(voiced_flags.iter())
+        .filter_map(|(&p, &v)| (v && p.is_finite() && p > 0.0).then_some(p))
+        .collect();
+    let pitch_min = valid_pitches.iter().fold(f64::MAX, |a, &b| a.min(b));
+    let pitch_max = valid_pitches.iter().fold(0.0f64, |a, &b| a.max(b));
+    let pitch_mean = if !valid_pitches.is_empty() {
+        valid_pitches.iter().sum::<f64>() / valid_pitches.len() as f64
+    } else {
+        0.0
+    };
     info!(
         elapsed_secs = pyin_elapsed.as_secs_f64(),
         pitch_frames = pitches.len(),
+        voiced_frames = voiced_count,
+        valid_pitch_frames = valid_pitches.len(),
+        raw_pitch_min = if pitch_min == f64::MAX {
+            0.0
+        } else {
+            pitch_min
+        },
+        raw_pitch_max = pitch_max,
+        raw_pitch_mean = pitch_mean,
         "pitch extraction completed"
     );
 
     info!("normalizing pitch contour");
     let contour = normalise_contour(&pitches, &voiced_flags);
+    let normalized_valid: Vec<f32> = contour
+        .iter()
+        .filter_map(|&v| v)
+        .filter(|&x| x != 0.0)
+        .collect();
+    let normalized_count = normalized_valid.len();
+    let (normalized_min, normalized_max, normalized_mean) = if normalized_count > 0 {
+        let min = normalized_valid.iter().fold(f32::MAX, |a, &b| a.min(b));
+        let max = normalized_valid.iter().fold(0.0f32, |a, &b| a.max(b));
+        let mean = normalized_valid.iter().sum::<f32>() / normalized_count as f32;
+        (min, max, mean)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+    info!(
+        normalized_valid_frames = normalized_count,
+        normalized_min = normalized_min,
+        normalized_max = normalized_max,
+        normalized_mean = normalized_mean,
+        "pitch contour normalized"
+    );
     let elapsed_secs = start_time.elapsed().as_secs() as u32;
     reporter(FeatureExtractionEvent::PhaseElapsed {
         phase: FeatureExtractionPhase::PitchContour,

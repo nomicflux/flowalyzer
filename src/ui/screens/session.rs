@@ -18,7 +18,6 @@ use crate::ui::components::spectrogram::{SpectrogramData, SpectrogramView};
 use crate::ui::components::waveform::WaveformView;
 
 const FRAME_WINDOW: usize = 400;
-const SPECTROGRAM_COLS: usize = 64;
 const FRAME_HOP_MS: f32 = 10.0;
 const RECIPE_SUCCESS_DISPLAY_SECS: u64 = 3;
 
@@ -84,17 +83,97 @@ impl SessionApp {
 
     fn sync_visuals(&mut self) {
         self.refresh_selection();
-        self.reference_waveform = normalize_series(tail_slice(
-            &self.snapshot.alignment.reference_energy,
-            FRAME_WINDOW,
-        ));
-        self.learner_waveform = normalize_series(tail_slice(
-            &self.snapshot.alignment.learner_energy,
-            FRAME_WINDOW,
-        ));
-        self.reference_pitch = tail_slice(&self.snapshot.alignment.reference_pitch, FRAME_WINDOW);
-        self.learner_pitch = tail_slice(&self.snapshot.alignment.learner_pitch, FRAME_WINDOW);
+        
+        // CRITICAL: Handle two cases:
+        // 1. Initial state (no phonemes): Use reference arrays directly for display
+        // 2. Shadowing state (has phonemes): Align arrays using phoneme timing
+        let ref_energy = &self.snapshot.alignment.reference_energy;
+        let learner_energy = &self.snapshot.alignment.learner_energy;
+        let ref_pitch = &self.snapshot.alignment.reference_pitch;
+        let learner_pitch = &self.snapshot.alignment.learner_pitch;
+        
+        let (aligned_ref_energy, aligned_learner_energy, aligned_ref_pitch, aligned_learner_pitch) = 
+            if self.snapshot.alignment.phonemes.is_empty() {
+                // Initial state: No alignment yet, just use reference arrays directly
+                // Learner arrays are empty, so just use reference for display
+                (
+                    ref_energy.clone(),
+                    learner_energy.clone(),
+                    ref_pitch.clone(),
+                    learner_pitch.clone(),
+                )
+            } else {
+                // Shadowing state: Align arrays using phoneme timing
+                let (ref_e, learner_e) = build_aligned_from_phonemes(&self.snapshot.alignment.phonemes, ref_energy, learner_energy);
+                let (ref_p, learner_p) = build_aligned_from_phonemes(&self.snapshot.alignment.phonemes, ref_pitch, learner_pitch);
+                (ref_e, learner_e, ref_p, learner_p)
+            };
+        
+        // Take the most recent frames
+        let ref_window = tail_slice(&aligned_ref_energy, FRAME_WINDOW);
+        let learner_window = tail_slice(&aligned_learner_energy, FRAME_WINDOW);
+        let ref_pitch_window = tail_slice(&aligned_ref_pitch, FRAME_WINDOW);
+        let learner_pitch_window = tail_slice(&aligned_learner_pitch, FRAME_WINDOW);
+        
+        // Pad to same length
+        let max_len = ref_window.len().max(learner_window.len());
+        let mut ref_padded = ref_window;
+        let mut learner_padded = learner_window;
+        ref_padded.resize(max_len, 0.0);
+        learner_padded.resize(max_len, 0.0);
+        
+        let max_pitch_len = ref_pitch_window.len().max(learner_pitch_window.len());
+        let mut ref_pitch_padded = ref_pitch_window;
+        let mut learner_pitch_padded = learner_pitch_window;
+        ref_pitch_padded.resize(max_pitch_len, 0.0);
+        learner_pitch_padded.resize(max_pitch_len, 0.0);
+        
+        self.reference_waveform = normalize_series(ref_padded);
+        self.learner_waveform = normalize_series(learner_padded);
+        self.reference_pitch = ref_pitch_padded;
+        self.learner_pitch = learner_pitch_padded;
+        // CRITICAL DEBUG: Log what we're actually displaying to diagnose garbled visualization
+        if !self.snapshot.alignment.reference_energy.is_empty() || !self.snapshot.alignment.learner_energy.is_empty() {
+            let ref_energy_preview: Vec<f32> = self.reference_waveform.iter().take(10).copied().collect();
+            let learner_energy_preview: Vec<f32> = self.learner_waveform.iter().take(10).copied().collect();
+            let ref_pitch_preview: Vec<f32> = self.reference_pitch.iter().take(10).copied().collect();
+            let learner_pitch_preview: Vec<f32> = self.learner_pitch.iter().take(10).copied().collect();
+            tracing::warn!(
+                reference_energy_frames = self.snapshot.alignment.reference_energy.len(),
+                learner_energy_frames = self.snapshot.alignment.learner_energy.len(),
+                reference_pitch_frames = self.snapshot.alignment.reference_pitch.len(),
+                learner_pitch_frames = self.snapshot.alignment.learner_pitch.len(),
+                reference_waveform_display_len = self.reference_waveform.len(),
+                learner_waveform_display_len = self.learner_waveform.len(),
+                reference_waveform_preview = ?ref_energy_preview,
+                learner_waveform_preview = ?learner_energy_preview,
+                reference_pitch_preview = ?ref_pitch_preview,
+                learner_pitch_preview = ?learner_pitch_preview,
+                phoneme_count = self.snapshot.alignment.phonemes.len(),
+                global_time_offset_ms = self.snapshot.alignment.global_time_offset_ms,
+                recording = self.snapshot.recording,
+                "DIAGNOSE: What data is being displayed in visualizations?"
+            );
+        }
         self.spectrogram = build_spectrogram_window(&self.snapshot.alignment, FRAME_WINDOW);
+        
+        // DEBUG: Log spectrogram values to diagnose solid blue bar
+        if let Some(ref spec) = self.spectrogram {
+            let similarity_preview: Vec<f32> = (0..spec.cols.min(10))
+                .map(|col| spec.value(0, col))
+                .collect();
+            let contour_preview: Vec<f32> = (0..spec.cols.min(10))
+                .map(|col| spec.value(1, col))
+                .collect();
+            tracing::warn!(
+                spectrogram_cols = spec.cols,
+                similarity_preview = ?similarity_preview,
+                contour_preview = ?contour_preview,
+                similarity_band_len = self.snapshot.alignment.similarity_band.len(),
+                contour_band_len = self.snapshot.alignment.contour_band.len(),
+                "DIAGNOSE: Why is spectrogram showing solid blue bar?"
+            );
+        }
     }
 
     fn refresh_selection(&mut self) {
@@ -109,6 +188,16 @@ impl SessionApp {
     fn poll_updates(&mut self, ctx: &egui::Context) {
         let mut changed = false;
         for update in self.handle.drain_snapshots() {
+            // Diagnostic logging: verify what snapshot update UI is receiving
+            tracing::info!(
+                update_reference_energy_frames = update.alignment.reference_energy.len(),
+                update_learner_energy_frames = update.alignment.learner_energy.len(),
+                update_reference_pitch_frames = update.alignment.reference_pitch.len(),
+                update_learner_pitch_frames = update.alignment.learner_pitch.len(),
+                update_phonemes = update.alignment.phonemes.len(),
+                update_recording = update.recording,
+                "UI received snapshot update"
+            );
             let new_variant = update.active_clip_variant;
             if new_variant == ClipVariant::Flowalyzed
                 && self.previous_clip_variant == ClipVariant::Original
@@ -457,6 +546,10 @@ impl SessionApp {
     fn show_waveforms(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("waveforms").show(ui, |ui| {
             let total_duration = self.snapshot.alignment.total_duration.as_secs_f64();
+            
+            // Reference waveform with clear label
+            ui.label(egui::RichText::new("Reference (Native Speaker)").color(egui::Color32::from_rgb(80, 160, 255)));
+            ui.end_row();
             let mut waveform_view = WaveformView {
                 id: "reference_waveform",
                 samples: &self.reference_waveform,
@@ -473,6 +566,10 @@ impl SessionApp {
             }
 
             ui.end_row();
+            
+            // Learner waveform with clear label
+            ui.label(egui::RichText::new("Your Voice (Shadowing)").color(egui::Color32::from_rgb(250, 120, 120)));
+            ui.end_row();
             WaveformView {
                 id: "learner_waveform",
                 samples: &self.learner_waveform,
@@ -482,6 +579,13 @@ impl SessionApp {
             }
             .show(ui);
             ui.end_row();
+            
+            // Show timing info
+            if !self.reference_waveform.is_empty() && !self.learner_waveform.is_empty() {
+                let frames_shown = self.reference_waveform.len().min(self.learner_waveform.len());
+                let time_shown_ms = frames_shown as f32 * FRAME_HOP_MS;
+                ui.label(egui::RichText::new(format!("Showing last {:.1}s of aligned audio", time_shown_ms / 1000.0)).small());
+            }
         });
     }
 
@@ -566,11 +670,23 @@ impl SessionApp {
     }
 
     fn show_pitch(&self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Pitch Contour").size(14.0));
+            ui.label(egui::RichText::new("●").color(egui::Color32::from_rgb(80, 160, 255)));
+            ui.label("Reference");
+            ui.label(egui::RichText::new("●").color(egui::Color32::from_rgb(250, 120, 120)));
+            ui.label("Your Voice");
+        });
         PitchView {
             reference: &self.reference_pitch,
             learner: &self.learner_pitch,
         }
         .show(ui);
+        if !self.reference_pitch.is_empty() && !self.learner_pitch.is_empty() {
+            let frames_shown = self.reference_pitch.len().min(self.learner_pitch.len());
+            let time_shown_ms = frames_shown as f32 * FRAME_HOP_MS;
+            ui.label(egui::RichText::new(format!("Showing last {:.1}s of aligned pitch", time_shown_ms / 1000.0)).small());
+        }
     }
 
     fn selected_phoneme(&self) -> Option<&AlignedPhoneme> {
@@ -639,44 +755,93 @@ fn build_spectrogram_window(
     alignment: &AlignmentReport,
     max_rows: usize,
 ) -> Option<SpectrogramData> {
-    let source = spectrogram_source(alignment);
-    if source.is_empty() {
+    // Show 2 rows: Similarity and Contour
+    // Each row represents time segments (columns)
+    let similarity_window = tail_slice(&alignment.similarity_band, max_rows);
+    let contour_window = tail_slice(&alignment.contour_band, max_rows);
+    
+    if similarity_window.is_empty() && contour_window.is_empty() {
         return None;
     }
-    let window = tail_slice(source, max_rows);
-    if window.is_empty() {
+    
+    // Use the length of the longer series, or pad to match
+    let time_segments = similarity_window.len().max(contour_window.len());
+    if time_segments == 0 {
         return None;
     }
-    Some(SpectrogramData::new(
-        window.len(),
-        SPECTROGRAM_COLS,
-        build_spectrogram_values(&window),
-    ))
+    
+    // CRITICAL: Check if all values are suspiciously high (>= 0.8) - this indicates a bug
+    let all_high_similarity = !similarity_window.is_empty() && 
+        similarity_window.iter().all(|&v| v >= 0.8);
+    if all_high_similarity {
+        tracing::warn!(
+            similarity_window_len = similarity_window.len(),
+            similarity_preview = ?similarity_window.iter().take(10).copied().collect::<Vec<f32>>(),
+            phoneme_count = alignment.phonemes.len(),
+            "WARNING: All similarity values are >= 0.8 - possible stale/incorrect data"
+        );
+    }
+    
+    // Build values: 2 rows (Similarity, Contour) × time_segments columns
+    let mut values = Vec::with_capacity(2 * time_segments);
+    
+    // Row 0: Similarity band
+    for i in 0..time_segments {
+        let value = similarity_window.get(i).copied().unwrap_or(0.0);
+        values.push(value.clamp(0.0, 1.0));
+    }
+    
+    // Row 1: Contour band
+    for i in 0..time_segments {
+        let value = contour_window.get(i).copied().unwrap_or(0.0);
+        values.push(value.clamp(0.0, 1.0));
+    }
+    
+    Some(SpectrogramData::new(2, time_segments, values))
 }
 
-fn spectrogram_source(alignment: &AlignmentReport) -> &[f32] {
-    if alignment.contour_band.is_empty() {
-        &alignment.similarity_band
-    } else {
-        &alignment.contour_band
+fn build_aligned_from_phonemes(
+    phonemes: &[AlignedPhoneme],
+    reference: &[f32],
+    learner: &[f32],
+) -> (Vec<f32>, Vec<f32>) {
+    // Reconstruct aligned arrays from phoneme timing
+    // Each phoneme tells us which reference frames map to which learner frames
+    let mut aligned_ref = Vec::new();
+    let mut aligned_learner = Vec::new();
+    
+    for phoneme in phonemes {
+        let ref_start_frame = (phoneme.reference_start_ms / FRAME_HOP_MS) as usize;
+        let ref_end_frame = (phoneme.reference_end_ms / FRAME_HOP_MS) as usize;
+        let learner_start_frame = (phoneme.learner_start_ms / FRAME_HOP_MS) as usize;
+        let learner_end_frame = (phoneme.learner_end_ms / FRAME_HOP_MS) as usize;
+        
+        // Extract frames for this phoneme
+        let ref_frames = if ref_start_frame < reference.len() {
+            reference[ref_start_frame..ref_end_frame.min(reference.len())].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        let learner_frames = if learner_start_frame < learner.len() {
+            learner[learner_start_frame..learner_end_frame.min(learner.len())].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        // Align by taking max length and padding/interpolating
+        let max_phoneme_len = ref_frames.len().max(learner_frames.len());
+        if max_phoneme_len > 0 {
+            let mut ref_aligned = ref_frames;
+            let mut learner_aligned = learner_frames;
+            ref_aligned.resize(max_phoneme_len, 0.0);
+            learner_aligned.resize(max_phoneme_len, 0.0);
+            aligned_ref.extend(ref_aligned);
+            aligned_learner.extend(learner_aligned);
+        }
     }
-}
-
-fn build_spectrogram_values(window: &[f32]) -> Vec<f32> {
-    let mut values = Vec::with_capacity(window.len() * SPECTROGRAM_COLS);
-    for &band in window {
-        push_spectrogram_row(band, &mut values);
-    }
-    values
-}
-
-fn push_spectrogram_row(band: f32, values: &mut Vec<f32>) {
-    let clamped = band.clamp(0.0, 1.0);
-    for col in 0..SPECTROGRAM_COLS {
-        let ratio = col as f32 / SPECTROGRAM_COLS as f32;
-        let emphasis = 1.0 - (ratio - 0.5).abs() * 2.0;
-        values.push((clamped * emphasis.max(0.0)).clamp(0.0, 1.0));
-    }
+    
+    (aligned_ref, aligned_learner)
 }
 
 fn tail_slice(series: &[f32], max_len: usize) -> Vec<f32> {

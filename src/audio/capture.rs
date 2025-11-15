@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Device, SampleFormat, Stream, StreamConfig};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use tracing::info;
 
 use crate::audio::resample;
 use crate::types::AudioData;
@@ -74,19 +75,44 @@ pub fn record_audio(config: &CaptureConfig) -> Result<AudioData> {
 
 fn select_device(config: &CaptureConfig) -> Result<Device> {
     let host = cpal::default_host();
+    let devices: Vec<_> = host
+        .input_devices()
+        .context("listing input devices failed")?
+        .collect();
+    let device_names: Vec<String> = devices.iter().filter_map(|d| d.name().ok()).collect();
+    info!(
+        available_devices = ?device_names,
+        requested_device = ?config.device_name,
+        "listing available input devices"
+    );
     if let Some(name) = config.device_name.as_deref() {
-        for device in host
-            .input_devices()
-            .context("listing input devices failed")?
-        {
+        for device in devices {
             if device.name().map(|n| n == name).unwrap_or(false) {
+                let supported = device.default_input_config().ok();
+                info!(
+                    device_name = ?device.name().ok(),
+                    sample_rate = ?supported.as_ref().map(|s| s.sample_rate().0),
+                    channels = supported.as_ref().map(|s| s.channels()),
+                    format = ?supported.as_ref().map(|s| s.sample_format()),
+                    "selected capture device"
+                );
                 return Ok(device);
             }
         }
         return bail_device(name);
     }
-    host.default_input_device()
-        .context("no default input device available")
+    let selected = host
+        .default_input_device()
+        .context("no default input device available")?;
+    let supported = selected.default_input_config().ok();
+    info!(
+        device_name = ?selected.name().ok(),
+        sample_rate = ?supported.as_ref().map(|s| s.sample_rate().0),
+        channels = supported.as_ref().map(|s| s.channels()),
+        format = ?supported.as_ref().map(|s| s.sample_format()),
+        "selected capture device (default)"
+    );
+    Ok(selected)
 }
 
 fn bail_device(name: &str) -> Result<Device> {
@@ -97,11 +123,16 @@ fn build_stream(device: &Device, config: &CaptureConfig) -> Result<StreamSetup> 
     let supported = device
         .default_input_config()
         .context("failed to query default input config")?;
-    let stream_config = StreamConfig {
-        channels: supported.channels(),
-        sample_rate: supported.sample_rate(),
-        buffer_size: BufferSize::Default,
-    };
+    let stream_config = supported.config();
+    info!(
+        device_name = ?device.name().ok(),
+        channels = stream_config.channels,
+        sample_rate = stream_config.sample_rate.0,
+        format = ?supported.sample_format(),
+        buffer_size = ?stream_config.buffer_size,
+        is_input = true,
+        "configured capture device"
+    );
     let capacity = channel_capacity(stream_config.sample_rate.0, &config.latency_ms);
     let (sender, receiver) = mpsc::sync_channel::<Vec<f32>>(capacity);
     let finished = Arc::new(AtomicBool::new(false));
@@ -217,6 +248,24 @@ fn emit_chunk_f32(
     sender: &Arc<SyncSender<Vec<f32>>>,
     finished: &Arc<AtomicBool>,
 ) {
+    // Diagnostic logging for raw stream data - log actual sample values to verify what we're receiving
+    if !data.is_empty() {
+        let raw_min = data.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+        let raw_max = data.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let _raw_mean = data.iter().sum::<f32>() / data.len() as f32;
+        let _raw_rms = (data.iter().map(|&x| x * x).sum::<f32>() / data.len() as f32).sqrt();
+        // Log first few actual sample values to see what we're getting
+        // Also check if values are in expected [-1.0, 1.0] range or if they're in a different range
+        let _sample_preview: Vec<f32> = data.iter().take(10).copied().collect();
+        let abs_max = raw_max.abs().max(raw_min.abs());
+        let _expected_range = if abs_max > 1.0 {
+            "OUTSIDE expected [-1.0, 1.0] range - may need normalization"
+        } else if abs_max < 0.01 {
+            "VERY LOW - microphone may not be capturing properly"
+        } else {
+            "within expected range"
+        };
+    }
     emit_from_slice(data, channels, sender, finished);
 }
 
@@ -260,7 +309,17 @@ fn emit_from_slice(
     for frame in data.chunks(channels) {
         mono.push(mix_to_mono(frame));
     }
-    let _ = sender.try_send(mono);
+    // Use try_send to avoid blocking in the audio callback
+    // If the channel is full or receiver is dropped, we skip this chunk
+    // This prevents blocking the audio thread and allows clean shutdown
+    if sender.try_send(mono).is_err() {
+        // CRITICAL: Chunks are being dropped! This will cause audio to not match what user is saying
+        // Channel full or receiver dropped - this is a serious problem
+        static DROP_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !DROP_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("ERROR: Audio chunks are being dropped! Channel is full or receiver disconnected. Audio will not match user's speech.");
+        }
+    }
 }
 
 fn collect_samples(
@@ -302,9 +361,11 @@ fn frames_for_duration(duration: Duration, sample_rate: u32) -> usize {
 
 fn channel_capacity(sample_rate: u32, latency_ms: &RangeInclusive<u32>) -> usize {
     let max_latency = (*latency_ms.end()).max(*latency_ms.start());
-    let frames = (sample_rate as u64 * max_latency as u64) / 1000;
-    let approx_chunks = (frames / 1024).max(2);
-    approx_chunks as usize
+    // Estimate chunks per second: sample_rate / typical_chunk_size (512)
+    let chunks_per_second = sample_rate as f64 / 512.0;
+    // Capacity should hold at least latency_ms worth of chunks, plus some headroom
+    let capacity = (chunks_per_second * max_latency as f64 / 1000.0 * 2.0).ceil() as usize;
+    capacity.max(10) // Minimum 10 chunks to prevent drops
 }
 
 pub fn mix_to_mono(frame: &[f32]) -> f32 {

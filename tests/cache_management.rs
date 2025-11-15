@@ -164,9 +164,15 @@ fn test_reference_alignment_contains_phonemes() -> Result<()> {
     )?;
 
     let alignment = engine.reference_alignment(ClipVariant::Original)?;
+    // CRITICAL: Reference-to-reference alignment is unnecessary - we don't align reference to itself
+    // But reference features should be populated for UI display
     assert!(
-        !alignment.phonemes.is_empty(),
-        "reference alignment should contain phoneme path"
+        !alignment.reference_energy.is_empty(),
+        "reference alignment should contain reference energy for UI display"
+    );
+    assert!(
+        alignment.phonemes.is_empty(),
+        "reference alignment should NOT contain phonemes (no reference-to-reference alignment)"
     );
     Ok(())
 }
@@ -184,16 +190,15 @@ fn test_reference_alignment_contour_band_normalized() -> Result<()> {
     )?;
 
     let alignment = engine.reference_alignment(ClipVariant::Original)?;
+    // CRITICAL: Reference-to-reference alignment is unnecessary - no contour_band without alignment
+    // But reference pitch should be populated for UI display
     assert!(
-        !alignment.contour_band.is_empty(),
-        "contour band should be populated"
+        !alignment.reference_pitch.is_empty(),
+        "reference alignment should contain reference pitch for UI display"
     );
     assert!(
-        alignment
-            .contour_band
-            .iter()
-            .all(|value| value.is_finite() && (0.0..=1.0).contains(value)),
-        "contour band values must stay within [0, 1]"
+        alignment.contour_band.is_empty(),
+        "contour band should be empty (no reference-to-reference alignment)"
     );
     Ok(())
 }
@@ -277,9 +282,10 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     engine.start(&mut snapshot)?;
 
     engine.set_active_clip(ClipVariant::Original);
+    let original_clip = create_test_clip(440.0, 1.0);
     let mut updates_original = 0;
     for _ in 0..32 {
-        if engine.poll(&mut snapshot)?.is_some() {
+        if engine.poll(&mut snapshot, &original_clip)?.is_some() {
             updates_original += 1;
             break;
         }
@@ -288,7 +294,7 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     engine.set_active_clip(ClipVariant::Flowalyzed);
     let mut updates_flowalyzed = 0;
     for _ in 0..32 {
-        if engine.poll(&mut snapshot)?.is_some() {
+        if engine.poll(&mut snapshot, &flowalyzed_clip)?.is_some() {
             updates_flowalyzed += 1;
             break;
         }

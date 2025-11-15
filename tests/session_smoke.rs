@@ -22,7 +22,7 @@ fn session_engine_produces_alignment_with_mock_capture() -> Result<()> {
     engine.start(&mut snapshot)?;
     let mut updates = 0;
     for _ in 0..32 {
-        if let Some(next) = engine.poll(&mut snapshot)? {
+        if let Some(next) = engine.poll(&mut snapshot, &reference_clip)? {
             assert!(next.scores.overall.is_finite());
             updates += 1;
             break;
