@@ -94,7 +94,7 @@ fn test_invalidate_flowalyzed_cache() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
+    engine.cache_flowalyzed_features(flowalyzed_clip, None)?;
 
     let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
@@ -137,7 +137,7 @@ fn test_cache_flowalyzed_features() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
+    engine.cache_flowalyzed_features(flowalyzed_clip, None)?;
 
     let flowalyzed_alignment = engine.reference_alignment(ClipVariant::Flowalyzed)?;
     assert!(
@@ -171,8 +171,8 @@ fn test_reference_alignment_contains_phonemes() -> Result<()> {
         "reference alignment should contain reference energy for UI display"
     );
     assert!(
-        alignment.phonemes.is_empty(),
-        "reference alignment should NOT contain phonemes (no reference-to-reference alignment)"
+        !alignment.phonemes.is_empty(),
+        "reference alignment should expose phoneme-like segments derived from reference features"
     );
     Ok(())
 }
@@ -197,8 +197,15 @@ fn test_reference_alignment_contour_band_normalized() -> Result<()> {
         "reference alignment should contain reference pitch for UI display"
     );
     assert!(
-        alignment.contour_band.is_empty(),
-        "contour band should be empty (no reference-to-reference alignment)"
+        !alignment.contour_band.is_empty(),
+        "contour band should contain normalized contour metrics"
+    );
+    assert!(
+        alignment
+            .contour_band
+            .iter()
+            .all(|value| (0.0..=1.0).contains(value)),
+        "contour band values should be normalized between 0.0 and 1.0"
     );
     Ok(())
 }
@@ -244,7 +251,7 @@ fn test_set_active_clip() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
+    engine.cache_flowalyzed_features(flowalyzed_clip, None)?;
 
     engine.set_active_clip(ClipVariant::Flowalyzed);
 
@@ -265,7 +272,7 @@ fn test_set_active_clip() -> Result<()> {
 #[test]
 fn test_process_chunk_uses_active_clip() -> Result<()> {
     let reference_clip = create_test_clip(440.0, 1.0);
-    let learner_samples = sine_wave(445.0, 1.0);
+    let learner_samples = sine_wave(445.0, 2.0);
     let capture = MockCapture::from_samples(SAMPLE_RATE, learner_samples, 1024);
     let mut engine = SessionEngine::new(
         reference_clip,
@@ -276,16 +283,15 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     )?;
 
     let flowalyzed_clip = create_test_clip(500.0, 1.0);
-    engine.cache_flowalyzed_features(&flowalyzed_clip, None)?;
+    engine.cache_flowalyzed_features(flowalyzed_clip, None)?;
 
     let mut snapshot = flowalyzer::pronunciation::SessionSnapshot::default();
     engine.start(&mut snapshot)?;
 
     engine.set_active_clip(ClipVariant::Original);
-    let original_clip = create_test_clip(440.0, 1.0);
     let mut updates_original = 0;
     for _ in 0..32 {
-        if engine.poll(&mut snapshot, &original_clip)?.is_some() {
+        if engine.poll(&mut snapshot)?.is_some() {
             updates_original += 1;
             break;
         }
@@ -294,7 +300,7 @@ fn test_process_chunk_uses_active_clip() -> Result<()> {
     engine.set_active_clip(ClipVariant::Flowalyzed);
     let mut updates_flowalyzed = 0;
     for _ in 0..32 {
-        if engine.poll(&mut snapshot, &flowalyzed_clip)?.is_some() {
+        if engine.poll(&mut snapshot)?.is_some() {
             updates_flowalyzed += 1;
             break;
         }

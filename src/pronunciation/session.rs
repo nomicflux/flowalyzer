@@ -24,9 +24,6 @@ use super::{
 };
 
 const CAPTURE_POLL_MS: u64 = 20;
-#[cfg(test)]
-const MIN_SIGNAL_FRACTION: usize = 10;
-
 #[derive(Clone)]
 pub struct SessionController {
     tx: Sender<SessionCommand>,
@@ -697,7 +694,7 @@ type CaptureSettings = super::CaptureSettings;
 
 pub mod engine {
     use super::{
-        append_limited, AlignmentReport, AudioAligner, CaptureSettings,
+        append_limited, AlignmentReport, AlignedPhoneme, AudioAligner, CaptureSettings,
         ClipVariant, FeatureExtractor, MetricCalculator, PronunciationError, PronunciationFeatures,
         PronunciationScores, RecordedClip, Result, SessionSnapshot, CAPTURE_POLL_MS,
         TARGET_SAMPLE_RATE,
@@ -731,6 +728,8 @@ pub mod engine {
         extractor: FeatureExtractor,
         aligner: AudioAligner,
         metrics: MetricCalculator,
+        reference_clip: RecordedClip,
+        flowalyzed_clip: Option<RecordedClip>,
         // SINGLE SOURCE OF TRUTH: Cache features only when computed, compute on demand
         reference_features_cache: HashMap<ClipVariant, PronunciationFeatures>,
         active_clip: ClipVariant,
@@ -756,27 +755,36 @@ pub mod engine {
         }
 
         pub fn new_with_progress(
-            _reference: RecordedClip, // Not stored - clips are in EngineRunner, single source of truth
+            reference: RecordedClip,
             alignment: AlignmentWeights,
             latency_budget_ms: u32,
             capture: C,
             _defer_feature_extraction: bool, // REMOVED: Always compute on demand
-            _feature_progress: Option<&dyn Fn(FeatureExtractionEvent)>, // Not used - compute on demand
+            mut feature_progress: Option<&mut dyn FnMut(FeatureExtractionEvent)>,
         ) -> Result<Self> {
             // CRITICAL: Don't pre-compute features - compute on demand when needed
             // Clips are stored in EngineRunner, not here - single source of truth
-            Ok(Self {
+            let mut engine = Self {
                 capture,
                 extractor: FeatureExtractor::new(),
                 aligner: AudioAligner::new(alignment),
                 metrics: MetricCalculator::new(),
+                reference_clip: reference,
+                flowalyzed_clip: None,
                 reference_features_cache: HashMap::new(), // Empty - compute on demand
                 active_clip: ClipVariant::Original,
                 learner_buffer: Vec::new(),
                 latency_budget_ms,
                 chunk_count: 0,
                 last_processed_buffer_size: None,
-            })
+            };
+            let reference_for_features = engine.reference_clip.clone();
+            if let Some(progress_cb) = feature_progress.as_mut() {
+                engine.ensure_features(ClipVariant::Original, &reference_for_features, Some(progress_cb))?;
+            } else {
+                engine.ensure_features(ClipVariant::Original, &reference_for_features, None)?;
+            }
+            Ok(engine)
         }
 
         pub fn start(&mut self, snapshot: &mut SessionSnapshot) -> Result<SessionSnapshot> {
@@ -790,7 +798,7 @@ pub mod engine {
             Ok(snapshot.clone())
         }
 
-        pub fn poll(&mut self, snapshot: &mut SessionSnapshot, active_clip: &RecordedClip) -> Result<Option<SessionSnapshot>> {
+        pub fn poll(&mut self, snapshot: &mut SessionSnapshot) -> Result<Option<SessionSnapshot>> {
             let timeout = Duration::from_millis(CAPTURE_POLL_MS);
             let poll_start = std::time::Instant::now();
             if let Some(chunk) = self.capture.recv_chunk(timeout) {
@@ -802,7 +810,7 @@ pub mod engine {
                     chunk_size = chunk.len(),
                     "received chunk from capture - VERIFY THIS IS CURRENT AUDIO"
                 );
-                if let Some(update) = self.process_chunk(chunk, active_clip)? {
+                if let Some(update) = self.process_chunk(chunk)? {
                     if update.latency_ms > self.latency_budget_ms as f32 {
                         warn!(
                             latency_ms = update.latency_ms,
@@ -833,7 +841,7 @@ pub mod engine {
                     && self.last_processed_buffer_size.is_none() {
                     // We have enough audio and haven't processed yet (e.g., after clip switch)
                     // Process with an empty chunk to trigger processing of existing buffer
-                    if let Some(update) = self.process_chunk(Vec::new(), active_clip)? {
+                    if let Some(update) = self.process_chunk(Vec::new())? {
                         *snapshot = snapshot
                             .clone()
                             .with_alignment(update.alignment, update.scores)
@@ -873,6 +881,7 @@ pub mod engine {
             const SEGMENT_FRAMES: usize = 18;
             let mut phonemes = Vec::new();
             let mut contour_band = Vec::new();
+            let energy_frames = ref_features.energy.as_slice().unwrap_or(&[]);
             
             for segment_id in 0..(ref_features.frame_count / SEGMENT_FRAMES.max(1)) {
                 let start_frame = segment_id * SEGMENT_FRAMES;
@@ -881,16 +890,16 @@ pub mod engine {
                     break;
                 }
                 
-                let start_ms = (start_frame as f32 * FRAME_HOP_MS);
-                let end_ms = (end_frame as f32 * FRAME_HOP_MS);
+                let start_ms = start_frame as f32 * FRAME_HOP_MS;
+                let end_ms = end_frame as f32 * FRAME_HOP_MS;
                 
                 // Extract pitch values for this segment
-                let segment_pitch: Vec<f32> = ref_features.pitch_contour
+                let segment_pitch: Vec<f32> = ref_features
+                    .pitch_contour
                     .iter()
                     .skip(start_frame)
                     .take(end_frame - start_frame)
-                    .filter_map(|&p| p)
-                    .filter(|&p| p > 0.0)
+                    .filter_map(|&p| if p > 0.0 { Some(p) } else { None })
                     .collect();
                 
                 // Compute contour metric: normalized pitch variance or mean
@@ -898,7 +907,7 @@ pub mod engine {
                     let mean = segment_pitch.iter().sum::<f32>() / segment_pitch.len() as f32;
                     // Normalize to [0, 1] range - assume pitch is in reasonable range (50-500 Hz)
                     // This is a placeholder - actual normalization should use pitch range from features
-                    (mean / 500.0).min(1.0).max(0.0)
+                    (mean / 500.0).clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
@@ -919,25 +928,30 @@ pub mod engine {
             
             // similarity_band: For reference-only, we can't compute similarity (no learner to compare to)
             // But we can use a placeholder or compute from energy variance
-            let similarity_band: Vec<f32> = phonemes.iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    // Use energy variance as a proxy for similarity - higher variance = more interesting segments
-                    let start_frame = (i * SEGMENT_FRAMES).min(ref_features.energy.len());
-                    let end_frame = ((i + 1) * SEGMENT_FRAMES).min(ref_features.energy.len());
-                    if start_frame < end_frame {
-                        let segment_energy = &ref_features.energy[start_frame..end_frame];
-                        let mean = segment_energy.iter().sum::<f32>() / segment_energy.len() as f32;
-                        let variance = segment_energy.iter()
-                            .map(|&e| (e - mean).powi(2))
-                            .sum::<f32>() / segment_energy.len() as f32;
-                        // Normalize variance to [0, 1] - this is a placeholder
-                        (variance.sqrt() * 10.0).min(1.0)
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
+                let similarity_band: Vec<f32> = phonemes.iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        // Use energy variance as a proxy for similarity - higher variance = more interesting segments
+                        let start_frame = (i * SEGMENT_FRAMES).min(energy_frames.len());
+                        let end_frame = ((i + 1) * SEGMENT_FRAMES).min(energy_frames.len());
+                        if start_frame < end_frame {
+                            let segment_energy = &energy_frames[start_frame..end_frame];
+                            if segment_energy.is_empty() {
+                                return 0.0;
+                            }
+                            let mean =
+                                segment_energy.iter().sum::<f32>() / segment_energy.len() as f32;
+                            let variance = segment_energy
+                                .iter()
+                                .map(|&e| (e - mean).powi(2))
+                                .sum::<f32>()
+                                / segment_energy.len() as f32;
+                            (variance.sqrt() * 10.0).min(1.0)
+                        } else {
+                            0.0
+                        }
+                    })
+                    .collect();
             
             Ok(AlignmentReport {
                 phonemes,
@@ -1037,26 +1051,43 @@ pub mod engine {
             self.last_processed_buffer_size = None;
         }
 
+        pub fn clip(&self, variant: ClipVariant) -> Result<&RecordedClip> {
+            match variant {
+                ClipVariant::Original => Ok(&self.reference_clip),
+                ClipVariant::Flowalyzed => self
+                    .flowalyzed_clip
+                    .as_ref()
+                    .ok_or_else(|| PronunciationError::new("flowalyzed clip not available")),
+            }
+        }
+
+        pub fn reference_clip(&self) -> &RecordedClip {
+            &self.reference_clip
+        }
+
         pub fn invalidate_flowalyzed_cache(&mut self) {
             self.reference_features_cache
                 .remove(&ClipVariant::Flowalyzed);
+            self.flowalyzed_clip = None;
             // REMOVED: reference_alignment_cache - we don't store reference-to-reference alignments
         }
 
         pub fn cache_flowalyzed_features(
             &mut self,
-            clip: &RecordedClip,
+            clip: RecordedClip,
             progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
         ) -> Result<()> {
             // Compute features on demand and cache them with progress updates
             if let Some(mut progress_cb) = progress {
-                self.ensure_features(ClipVariant::Flowalyzed, clip, Some(&mut *progress_cb))
+                self.ensure_features(ClipVariant::Flowalyzed, &clip, Some(&mut *progress_cb))?;
             } else {
-                self.ensure_features(ClipVariant::Flowalyzed, clip, None)
+                self.ensure_features(ClipVariant::Flowalyzed, &clip, None)?;
             }
+            self.flowalyzed_clip = Some(clip);
+            Ok(())
         }
 
-        fn process_chunk(&mut self, chunk: Vec<f32>, active_clip: &RecordedClip) -> Result<Option<SnapshotUpdate>> {
+        fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
             let capture_rate = self
                 .capture
                 .sample_rate()
@@ -1092,7 +1123,8 @@ pub mod engine {
                 amplified_peak = amplified_peak,
                 "chunk amplified"
             );
-            let max_samples = self.max_samples(active_clip);
+            let active_clip = self.active_clip_handle()?.clone();
+            let max_samples = self.max_samples(&active_clip);
             let buffer_size_before = self.learner_buffer.len();
             append_limited(&mut self.learner_buffer, &amplified, max_samples);
             let buffer_size_after = self.learner_buffer.len();
@@ -1120,10 +1152,11 @@ pub mod engine {
             const MIN_PROCESSING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 10; // Use original minimum for tests (0.1s)
             #[cfg(not(test))]
             const MIN_PROCESSING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize; // 1 second minimum for reliable pitch detection
-            
+            #[cfg(not(test))]
             const PROCESS_INTERVAL_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 2; // Process every 0.5 seconds of new audio
             let should_process = if buffer_size_after >= MIN_PROCESSING_SAMPLES {
                 // Track last processed size to only process when we have enough NEW audio
+                #[cfg(not(test))]
                 let last_processed = self.last_processed_buffer_size.unwrap_or(0);
                 // For tests, process immediately when threshold is reached (no interval requirement)
                 #[cfg(test)]
@@ -1194,7 +1227,7 @@ pub mod engine {
             // Ensure reference features are cached, then get them for alignment
             // CRITICAL: Pass clip from EngineRunner (single source of truth), not stored in SessionEngine
             // No progress callback during shadowing - compute synchronously
-            self.ensure_features(self.active_clip, active_clip, None)?;
+            self.ensure_features(self.active_clip, &active_clip, None)?;
             let ref_features = self.get_reference_features(self.active_clip)?;
             let alignment = match self.aligner.align(ref_features, &features) {
                 Ok(align) => align,
@@ -1255,6 +1288,10 @@ pub mod engine {
             // Compute on demand - no stored reference_samples
             reference_clip.samples.len() + TARGET_SAMPLE_RATE as usize / 2
         }
+
+        fn active_clip_handle(&self) -> Result<&RecordedClip> {
+            self.clip(self.active_clip)
+        }
     }
 
     struct SnapshotUpdate {
@@ -1263,12 +1300,28 @@ pub mod engine {
         latency_ms: f32,
     }
 
+    enum LiveCaptureBackend {
+        Real(LiveCapture),
+        Mock(MockCapture),
+    }
+
     pub struct LiveCaptureSource {
-        live: LiveCapture,
+        backend: LiveCaptureBackend,
     }
 
     impl LiveCaptureSource {
         pub fn new(settings: &CaptureSettings) -> Result<Self> {
+            if std::env::var("FLOWALYZER_TEST_CAPTURE")
+                .map(|value| value == "mock")
+                .unwrap_or(false)
+            {
+                info!("creating mock capture source for tests");
+                let mock =
+                    MockCapture::from_samples(settings.sample_rate, Vec::new(), 0);
+                return Ok(Self {
+                    backend: LiveCaptureBackend::Mock(mock),
+                });
+            }
             let config = super::build_capture_config(settings);
             info!(
                 device = ?config.device_name,
@@ -1292,26 +1345,39 @@ pub mod engine {
                 actual_sample_rate = sample_rate,
                 "live capture created successfully"
             );
-            Ok(Self { live })
+            Ok(Self {
+                backend: LiveCaptureBackend::Real(live),
+            })
         }
     }
 
     impl CaptureSource for LiveCaptureSource {
         fn start(&mut self) -> Result<u32> {
-            // Already started when created - just return sample rate
-            Ok(self.live.sample_rate())
+            match &mut self.backend {
+                LiveCaptureBackend::Real(live) => Ok(live.sample_rate()),
+                LiveCaptureBackend::Mock(mock) => mock.start(),
+            }
         }
 
         fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>> {
-            self.live.recv_chunk(timeout)
+            match &mut self.backend {
+                LiveCaptureBackend::Real(live) => live.recv_chunk(timeout),
+                LiveCaptureBackend::Mock(mock) => mock.recv_chunk(timeout),
+            }
         }
 
         fn stop(&mut self) {
-            self.live.stop();
+            match &mut self.backend {
+                LiveCaptureBackend::Real(live) => live.stop(),
+                LiveCaptureBackend::Mock(mock) => mock.stop(),
+            }
         }
 
         fn sample_rate(&self) -> Option<u32> {
-            Some(self.live.sample_rate())
+            match &self.backend {
+                LiveCaptureBackend::Real(live) => Some(live.sample_rate()),
+                LiveCaptureBackend::Mock(mock) => mock.sample_rate(),
+            }
         }
     }
 
@@ -1368,8 +1434,6 @@ pub mod engine {
 
 struct EngineRunner {
     engine: engine::SessionEngine<engine::LiveCaptureSource>,
-    original_reference: RecordedClip,
-    flowalyzed_clip: Option<RecordedClip>,
     initial_snapshot: SessionSnapshot,
     playback_sink: Option<Sink>,
     _playback_stream: Option<OutputStream>, // Keep stream alive during playback
@@ -1399,17 +1463,17 @@ impl EngineRunner {
             .map_err(|err| PronunciationError::new(format!("failed to create live capture: {}", err)))?;
         info!("creating session engine (this will extract features from reference)");
         progress.stage(InitializationStage::ExtractingReferenceFeatures);
-        let feature_progress = |event: FeatureExtractionEvent| {
+        let mut feature_progress = |event: FeatureExtractionEvent| {
             progress.handle_feature_event(event);
         };
         let build_start = Instant::now();
-        let mut engine = engine::SessionEngine::new_with_progress(
-            original_reference.clone(),
+        let engine = engine::SessionEngine::new_with_progress(
+            original_reference,
             config.alignment,
             config.latency_budget_ms,
             capture,
             false, // Don't defer in production
-            Some(&feature_progress),
+            Some(&mut feature_progress),
         )
         .map_err(|err| {
             let elapsed = build_start.elapsed();
@@ -1424,22 +1488,6 @@ impl EngineRunner {
         info!(
             elapsed_secs = engine_elapsed.as_secs_f64(),
             "session engine created successfully"
-        );
-        // CRITICAL: Compute features for Original clip during initialization so UI can display
-        // But don't align reference to itself - that's invalid. Just compute features on demand.
-        info!("computing initial reference features");
-        progress.stage(InitializationStage::ExtractingReferenceFeatures);
-        let features_start = Instant::now();
-        // Compute features for Original clip - needed for initial display
-        // Pass progress callback to show UI updates
-        let mut feature_progress_cb = |event: FeatureExtractionEvent| {
-            progress.handle_feature_event(event);
-        };
-        engine.ensure_features(ClipVariant::Original, &original_reference, Some(&mut feature_progress_cb))?;
-        let features_elapsed = features_start.elapsed();
-        info!(
-            elapsed_secs = features_elapsed.as_secs_f64(),
-            "initial reference features computed"
         );
         progress.stage(InitializationStage::Finalizing);
         // CRITICAL: UI needs reference features in AlignmentReport to display waveforms/pitch contours
@@ -1473,35 +1521,10 @@ impl EngineRunner {
         );
         Ok(Self {
             engine,
-            original_reference,
-            flowalyzed_clip: None,
             initial_snapshot,
             playback_sink: None,
             _playback_stream: None,
         })
-    }
-
-    fn active_clip(&self, variant: ClipVariant) -> Result<&RecordedClip> {
-        match variant {
-            ClipVariant::Original => Ok(&self.original_reference),
-            ClipVariant::Flowalyzed => self
-                .flowalyzed_clip
-                .as_ref()
-                .ok_or_else(|| PronunciationError::new("flowalyzed clip not available")),
-        }
-    }
-
-    // CRITICAL: Return clip pointer without borrowing self for the entire scope
-    // This allows us to mutably borrow self.engine while the clip reference is used
-    fn get_active_clip_ptr(&self, variant: ClipVariant) -> Result<*const RecordedClip> {
-        match variant {
-            ClipVariant::Original => Ok(&self.original_reference as *const _),
-            ClipVariant::Flowalyzed => self
-                .flowalyzed_clip
-                .as_ref()
-                .map(|c| c as *const _)
-                .ok_or_else(|| PronunciationError::new("flowalyzed clip not available")),
-        }
     }
 
     fn generate_flowalyzed_clip(
@@ -1510,12 +1533,13 @@ impl EngineRunner {
         range_end: f64,
         recipe: &Recipe,
     ) -> Result<RecordedClip> {
-        apply_recipe_to_range(&self.original_reference, range_start, range_end, recipe)
+        let reference = self.engine.reference_clip();
+        apply_recipe_to_range(reference, range_start, range_end, recipe)
     }
 
     fn cache_and_activate_flowalyzed(
         &mut self,
-        clip: &RecordedClip,
+        clip: RecordedClip,
         progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
     ) -> Result<()> {
         self.engine.cache_flowalyzed_features(clip, progress)?;
@@ -1585,7 +1609,7 @@ impl EngineRunner {
         // Stop any existing playback
         self.stop_playback();
         // Get clip from snapshot variant (source of truth) and prepare samples
-        let (stereo_samples, sample_rate) = match self.active_clip(snapshot.active_clip_variant) {
+        let (stereo_samples, sample_rate) = match self.engine.clip(snapshot.active_clip_variant) {
             Ok(clip) => (duplicate_to_stereo(&clip.samples), clip.sample_rate),
             Err(err) => {
                 error!(error = %err, "failed to get clip for replay");
@@ -1678,14 +1702,12 @@ impl EngineRunner {
                 *metrics_state_clone.borrow_mut() = Some(metrics.clone());
             }
         });
-        if let Err(err) =
-            self.activate_flowalyzed_clip(&new_clip, snapshot, Some(progress_callback))
-        {
+        if let Err(err) = self.activate_flowalyzed_clip(new_clip, Some(progress_callback)) {
             self.emit_cache_error(updates, snapshot, err);
             return;
         }
         emitter.stage(RecipeApplicationStage::Caching);
-        self.complete_recipe_application(new_clip, updates, snapshot);
+        self.complete_recipe_application(updates, snapshot);
     }
 
     fn prepare_recipe_application(&mut self, range_start: f64, range_end: f64, recipe: &Recipe) {
@@ -1698,11 +1720,9 @@ impl EngineRunner {
 
     fn complete_recipe_application(
         &mut self,
-        new_clip: RecordedClip,
         updates: &Sender<SessionSnapshot>,
         snapshot: &mut SessionSnapshot,
     ) {
-        self.flowalyzed_clip = Some(new_clip);
         snapshot.active_clip_variant = ClipVariant::Flowalyzed;
         snapshot.has_flowalyzed_clip = true;
         snapshot.recipe_applying = false;
@@ -1725,8 +1745,7 @@ impl EngineRunner {
 
     fn activate_flowalyzed_clip(
         &mut self,
-        new_clip: &RecordedClip,
-        _snapshot: &mut SessionSnapshot,
+        new_clip: RecordedClip,
         progress: Option<Box<dyn FnMut(FeatureExtractionEvent)>>,
     ) -> Result<()> {
         self.cache_and_activate_flowalyzed(new_clip, progress)
@@ -1777,7 +1796,7 @@ impl EngineRunner {
     }
 
     fn can_toggle_to_flowalyzed(&self) -> bool {
-        self.flowalyzed_clip.is_some()
+        self.engine.clip(ClipVariant::Flowalyzed).is_ok()
     }
 
     fn apply_variant_change(&mut self, variant: ClipVariant) -> Result<()> {
@@ -1806,7 +1825,7 @@ impl EngineRunner {
         let _ = updates.send(start_update);
         info!("starting reference playback");
         // Get clip from snapshot variant (source of truth) and prepare samples
-        let (stereo_samples, sample_rate) = match self.active_clip(snapshot.active_clip_variant) {
+        let (stereo_samples, sample_rate) = match self.engine.clip(snapshot.active_clip_variant) {
             Ok(clip) => (duplicate_to_stereo(&clip.samples), clip.sample_rate),
             Err(err) => {
                 error!(error = %err, "failed to get clip for playback");
@@ -1875,18 +1894,7 @@ impl EngineRunner {
                     }
                 }
             }
-            // CRITICAL: Pass clip from EngineRunner (single source of truth) to SessionEngine
-            // Use raw pointer to avoid borrow conflicts - safe because clip lives in EngineRunner
-            let active_clip_ptr = match self.get_active_clip_ptr(snapshot.active_clip_variant) {
-                Ok(ptr) => ptr,
-                Err(e) => {
-                    error!(error = %e, "failed to get active clip");
-                    continue; // Skip this iteration if clip unavailable
-                }
-            };
-            // SAFETY: active_clip_ptr is valid for the duration of poll because clips are stored in EngineRunner
-            let active_clip = unsafe { &*active_clip_ptr };
-            let poll_result = self.engine.poll(snapshot, active_clip);
+            let poll_result = self.engine.poll(snapshot);
             match poll_result {
                 Ok(Some(mut update)) => {
                     // Preserve snapshot's variant and flowalyzed state, don't overwrite
@@ -1942,11 +1950,6 @@ fn append_limited(buffer: &mut Vec<f32>, chunk: &[f32], max_samples: usize) {
         let excess = buffer.len() - max_samples;
         buffer.drain(0..excess);
     }
-}
-
-#[cfg(test)]
-fn min_required_samples() -> usize {
-    TARGET_SAMPLE_RATE as usize / MIN_SIGNAL_FRACTION
 }
 
 fn poll_command(commands: &Receiver<SessionCommand>) -> Option<SessionCommand> {

@@ -75,6 +75,7 @@ fn create_test_recipe() -> Recipe {
 }
 
 fn create_session_runtime() -> Result<(SessionRuntime, TempDir)> {
+    std::env::set_var("FLOWALYZER_TEST_CAPTURE", "mock");
     let samples = sine_wave(440.0, 1.0);
     let temp_dir = TempDir::new()?;
     let wav_path = temp_dir.path().join("test_reference.wav");

@@ -94,12 +94,12 @@
 ### Target Data Contracts
 
 #### Original vs Flowalyzed Clip Storage
-- **Current**: Single `EngineRunner.reference: RecordedClip` (session.rs:603)
-- **Target**: Maintain two variants:
-  - `original_reference: RecordedClip` (immutable, loaded from file)
-  - `flowalyzed_reference: Option<RecordedClip>` (generated from recipe application)
-- **Active Clip Flag**: `active_clip: ClipVariant` enum (`Original | Flowalyzed`)
-- **Metadata**: Timestamp when flowalyzed clip was generated, recipe used
+- **Current**: `SessionEngine` owns the original reference clip (`reference_clip`) and an optional flowalyzed clip (`flowalyzed_clip`). `EngineRunner` queries the engine for playback/toggling.
+- **Target**: Maintain both variants inside the engine:
+  - `reference_clip: RecordedClip` (immutable, loaded from disk once)
+  - `flowalyzed_clip: Option<RecordedClip>` (set whenever a recipe generates a new clip)
+- **Active Clip Flag**: `SessionEngine.active_clip: ClipVariant` tracks which clip drives processing; UI snapshots follow via `SessionSnapshot.active_clip_variant`.
+- **Metadata**: Flowalyzed clip timestamps/recipe metadata can live alongside the stored clip if needed (future enhancement).
 
 #### Cache Invalidation Rules
 - **Reference Features Cache**: Keyed by clip identity (original vs flowalyzed)
@@ -670,4 +670,3 @@ All new tests must follow these principles. Test performance regressions will be
 - Flowalyzed clip generation timestamp display (metadata tracking removed per "No Dead Code" rule)
 - Advanced cache eviction strategies (current implementation invalidates old flowalyzed cache on new generation)
 - Streaming recipe application for very long clips (current implementation processes entire range at once)
-
