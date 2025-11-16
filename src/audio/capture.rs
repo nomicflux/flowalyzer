@@ -315,7 +315,8 @@ fn emit_from_slice(
     if sender.try_send(mono).is_err() {
         // CRITICAL: Chunks are being dropped! This will cause audio to not match what user is saying
         // Channel full or receiver dropped - this is a serious problem
-        static DROP_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static DROP_WARNED: std::sync::atomic::AtomicBool =
+            std::sync::atomic::AtomicBool::new(false);
         if !DROP_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             eprintln!("ERROR: Audio chunks are being dropped! Channel is full or receiver disconnected. Audio will not match user's speech.");
         }

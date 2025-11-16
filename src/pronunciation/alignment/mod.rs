@@ -29,25 +29,26 @@ impl AudioAligner {
         learner: &PronunciationFeatures,
     ) -> Result<AlignmentReport> {
         ensure_features(reference, learner)?;
-        
+
         // CRITICAL BUG FIX: Prevent aligning reference to itself (which produces invalid perfect similarity)
         if std::ptr::eq(reference as *const _, learner as *const _) {
             return Err(PronunciationError::new(
                 "cannot align reference to itself - this produces invalid perfect similarity scores"
             ));
         }
-        
+
         let score_grid = build_cost_grid(reference, learner, self.warp_band, &self.weights);
         let path = trace_optimal_path(&score_grid)?;
         let segments =
             summarise_segments(reference, learner, &path, self.segment_frames, &score_grid)?;
-        
+
         Ok(AlignmentReport {
             phonemes: segments.phonemes,
             total_duration: Duration::from_millis(frame_to_ms(reference.frame_count).round() as u64),
             reference_path_cost: segments.total_cost,
             learner_path_cost: segments.total_cost,
             global_time_offset_ms: segments.global_offset,
+            learner_offset_ms: 0.0,
             confidence: segments.confidence,
             reference_energy: reference.energy.to_vec(),
             learner_energy: learner.energy.to_vec(),

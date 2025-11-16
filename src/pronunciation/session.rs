@@ -24,6 +24,19 @@ use super::{
 };
 
 const CAPTURE_POLL_MS: u64 = 20;
+const MIN_SIGNAL_RMS: f32 = 0.005;
+const MIN_SPEECH_DURATION_MS: f32 = 200.0;
+const MAX_PROCESSING_WINDOW_MS: f32 = 2000.0;
+const SILENCE_WINDOW_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 100;
+const DEFAULT_MIC_WARMUP_MS: u64 = 500;
+
+fn mic_warmup_duration() -> Duration {
+    let custom = std::env::var("FLOWALYZER_MIC_WARMUP_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MIC_WARMUP_MS);
+    Duration::from_millis(custom)
+}
 #[derive(Clone)]
 pub struct SessionController {
     tx: Sender<SessionCommand>,
@@ -241,6 +254,8 @@ pub struct SessionSnapshot {
     pub recipe_progress: Option<RecipeApplicationProgress>,
     pub active_clip_variant: ClipVariant,
     pub has_flowalyzed_clip: bool,
+    pub warming_up: bool,
+    pub warmup_remaining_ms: Option<u32>,
 }
 
 impl Default for SessionSnapshot {
@@ -258,6 +273,8 @@ impl Default for SessionSnapshot {
             recipe_progress: None,
             active_clip_variant: ClipVariant::Original,
             has_flowalyzed_clip: false,
+            warming_up: false,
+            warmup_remaining_ms: None,
         }
     }
 }
@@ -486,6 +503,12 @@ impl SessionSnapshot {
         self.recipe_progress = Some(progress);
         self
     }
+
+    pub fn with_warmup_status(mut self, warming: bool, remaining_ms: Option<u32>) -> Self {
+        self.warming_up = warming;
+        self.warmup_remaining_ms = remaining_ms;
+        self
+    }
 }
 
 struct InitializationEmitter {
@@ -694,10 +717,11 @@ type CaptureSettings = super::CaptureSettings;
 
 pub mod engine {
     use super::{
-        append_limited, AlignmentReport, AlignedPhoneme, AudioAligner, CaptureSettings,
-        ClipVariant, FeatureExtractor, MetricCalculator, PronunciationError, PronunciationFeatures,
-        PronunciationScores, RecordedClip, Result, SessionSnapshot, CAPTURE_POLL_MS,
-        TARGET_SAMPLE_RATE,
+        append_limited, ms_to_samples, samples_to_ms, AlignedPhoneme, AlignmentReport,
+        AudioAligner, CaptureSettings, ClipVariant, FeatureExtractor, MetricCalculator,
+        PronunciationError, PronunciationFeatures, PronunciationScores, RecordedClip, Result,
+        SessionSnapshot, CAPTURE_POLL_MS, MAX_PROCESSING_WINDOW_MS, MIN_SIGNAL_RMS,
+        MIN_SPEECH_DURATION_MS, SILENCE_WINDOW_SAMPLES, TARGET_SAMPLE_RATE,
     };
     use crate::audio::capture::LiveCapture;
     use crate::audio::resample;
@@ -714,6 +738,30 @@ pub mod engine {
         let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
         let peak = samples.iter().map(|&s| s.abs()).fold(0.0f32, f32::max);
         (rms, peak)
+    }
+
+    fn apply_adaptive_gain(samples: &[f32]) -> Vec<f32> {
+        if samples.is_empty() {
+            return Vec::new();
+        }
+        let (rms, _) = compute_audio_metrics(samples);
+        const TARGET_RMS: f32 = 0.05;
+        const MAX_GAIN: f32 = 25.0;
+        const MIN_GAIN: f32 = 1.0;
+        let gain = if rms > 0.0 {
+            (TARGET_RMS / rms).clamp(MIN_GAIN, MAX_GAIN)
+        } else {
+            MAX_GAIN
+        };
+        samples
+            .iter()
+            .map(|&sample| soft_limit(sample * gain))
+            .collect()
+    }
+
+    fn soft_limit(value: f32) -> f32 {
+        const TARGET: f32 = 0.95;
+        (value / TARGET).tanh() * TARGET
     }
 
     pub trait CaptureSource {
@@ -734,12 +782,18 @@ pub mod engine {
         reference_features_cache: HashMap<ClipVariant, PronunciationFeatures>,
         active_clip: ClipVariant,
         learner_buffer: Vec<f32>,
+        pending_offset_ms: f32,
+        applied_offset_ms: f32,
+        voice_detected: bool,
+        warmup_active: bool,
+        voiced_samples_since_detection: usize,
+        ingested_samples: usize,
         // REMOVED: reference: RecordedClip - clips are stored in EngineRunner, not here
         // REMOVED: reference_samples: usize - compute on demand from clip
         // REMOVED: defer_feature_extraction: bool - always compute on demand
         latency_budget_ms: u32,
         chunk_count: usize,
-        last_processed_buffer_size: Option<usize>,
+        last_processed_ingested_samples: Option<usize>,
     }
 
     impl<C: CaptureSource> SessionEngine<C> {
@@ -751,7 +805,14 @@ pub mod engine {
             _defer_feature_extraction: bool, // REMOVED: Always compute on demand
         ) -> Result<Self> {
             // REMOVED: defer_feature_extraction - always compute on demand
-            Self::new_with_progress(reference, alignment, latency_budget_ms, capture, false, None)
+            Self::new_with_progress(
+                reference,
+                alignment,
+                latency_budget_ms,
+                capture,
+                false,
+                None,
+            )
         }
 
         pub fn new_with_progress(
@@ -774,13 +835,23 @@ pub mod engine {
                 reference_features_cache: HashMap::new(), // Empty - compute on demand
                 active_clip: ClipVariant::Original,
                 learner_buffer: Vec::new(),
+                pending_offset_ms: 0.0,
+                applied_offset_ms: 0.0,
+                voice_detected: false,
+                warmup_active: false,
+                voiced_samples_since_detection: 0,
+                ingested_samples: 0,
                 latency_budget_ms,
                 chunk_count: 0,
-                last_processed_buffer_size: None,
+                last_processed_ingested_samples: None,
             };
             let reference_for_features = engine.reference_clip.clone();
             if let Some(progress_cb) = feature_progress.as_mut() {
-                engine.ensure_features(ClipVariant::Original, &reference_for_features, Some(progress_cb))?;
+                engine.ensure_features(
+                    ClipVariant::Original,
+                    &reference_for_features,
+                    Some(progress_cb),
+                )?;
             } else {
                 engine.ensure_features(ClipVariant::Original, &reference_for_features, None)?;
             }
@@ -790,11 +861,11 @@ pub mod engine {
         pub fn start(&mut self, snapshot: &mut SessionSnapshot) -> Result<SessionSnapshot> {
             info!("starting capture stream");
             let sample_rate = self.capture.start()?;
-            self.learner_buffer.clear();
+            self.reset_processing_state();
             self.chunk_count = 0;
-            self.last_processed_buffer_size = None;
             info!(sample_rate, "capture stream started successfully");
-            *snapshot = snapshot.clone().with_recording(true, true);
+            self.warmup_active = false;
+            *snapshot = snapshot.clone().with_recording(true, false);
             Ok(snapshot.clone())
         }
 
@@ -829,7 +900,7 @@ pub mod engine {
                     *snapshot = snapshot
                         .clone()
                         .with_alignment(update.alignment, update.scores)
-                        .with_recording(true, true)
+                        .with_recording(true, snapshot.reference_playing)
                         .with_latency(update.latency_ms, self.latency_budget_ms);
                     return Ok(Some(snapshot.clone()));
                 }
@@ -837,15 +908,16 @@ pub mod engine {
                 // No chunk received - check if we should process existing buffer (e.g., after clip switch)
                 // This is mainly for tests where all chunks may be consumed but buffer still has audio
                 #[cfg(test)]
-                if self.learner_buffer.len() >= TARGET_SAMPLE_RATE as usize / 10 
-                    && self.last_processed_buffer_size.is_none() {
+                if self.learner_buffer.len() >= TARGET_SAMPLE_RATE as usize / 10
+                    && self.last_processed_ingested_samples.is_none()
+                {
                     // We have enough audio and haven't processed yet (e.g., after clip switch)
                     // Process with an empty chunk to trigger processing of existing buffer
                     if let Some(update) = self.process_chunk(Vec::new())? {
                         *snapshot = snapshot
                             .clone()
                             .with_alignment(update.alignment, update.scores)
-                            .with_recording(true, true)
+                            .with_recording(true, snapshot.reference_playing)
                             .with_latency(update.latency_ms, self.latency_budget_ms);
                         return Ok(Some(snapshot.clone()));
                     }
@@ -860,8 +932,12 @@ pub mod engine {
                 "stopping capture stream"
             );
             self.capture.stop();
-            self.learner_buffer.clear();
-            *snapshot = snapshot.clone().with_recording(false, false);
+            self.warmup_active = false;
+            self.reset_processing_state();
+            *snapshot = snapshot
+                .clone()
+                .with_recording(false, false)
+                .with_warmup_status(false, None);
             snapshot.clone()
         }
 
@@ -875,24 +951,24 @@ pub mod engine {
             let ref_features = self.get_reference_features(variant)?;
             const FRAME_HOP_MS: f32 = 10.0;
             let total_duration_ms = (ref_features.frame_count as f32 * FRAME_HOP_MS).round() as u64;
-            
+
             // Create phonemes by segmenting reference audio into time segments
             // Use same segment size as alignment uses (18 frames = 180ms per segment)
             const SEGMENT_FRAMES: usize = 18;
             let mut phonemes = Vec::new();
             let mut contour_band = Vec::new();
             let energy_frames = ref_features.energy.as_slice().unwrap_or(&[]);
-            
+
             for segment_id in 0..(ref_features.frame_count / SEGMENT_FRAMES.max(1)) {
                 let start_frame = segment_id * SEGMENT_FRAMES;
                 let end_frame = ((segment_id + 1) * SEGMENT_FRAMES).min(ref_features.frame_count);
                 if start_frame >= end_frame {
                     break;
                 }
-                
+
                 let start_ms = start_frame as f32 * FRAME_HOP_MS;
                 let end_ms = end_frame as f32 * FRAME_HOP_MS;
-                
+
                 // Extract pitch values for this segment
                 let segment_pitch: Vec<f32> = ref_features
                     .pitch_contour
@@ -901,7 +977,7 @@ pub mod engine {
                     .take(end_frame - start_frame)
                     .filter_map(|&p| if p > 0.0 { Some(p) } else { None })
                     .collect();
-                
+
                 // Compute contour metric: normalized pitch variance or mean
                 let contour_value = if !segment_pitch.is_empty() {
                     let mean = segment_pitch.iter().sum::<f32>() / segment_pitch.len() as f32;
@@ -912,7 +988,7 @@ pub mod engine {
                     0.0
                 };
                 contour_band.push(contour_value);
-                
+
                 phonemes.push(AlignedPhoneme {
                     symbol: format!("R{}", segment_id), // R for Reference
                     reference_start_ms: start_ms,
@@ -925,51 +1001,55 @@ pub mod engine {
                     contour_similarity: contour_value, // Use the contour metric we computed
                 });
             }
-            
+
             // similarity_band: For reference-only, we can't compute similarity (no learner to compare to)
             // But we can use a placeholder or compute from energy variance
-                let similarity_band: Vec<f32> = phonemes.iter()
-                    .enumerate()
-                    .map(|(i, _)| {
-                        // Use energy variance as a proxy for similarity - higher variance = more interesting segments
-                        let start_frame = (i * SEGMENT_FRAMES).min(energy_frames.len());
-                        let end_frame = ((i + 1) * SEGMENT_FRAMES).min(energy_frames.len());
-                        if start_frame < end_frame {
-                            let segment_energy = &energy_frames[start_frame..end_frame];
-                            if segment_energy.is_empty() {
-                                return 0.0;
-                            }
-                            let mean =
-                                segment_energy.iter().sum::<f32>() / segment_energy.len() as f32;
-                            let variance = segment_energy
-                                .iter()
-                                .map(|&e| (e - mean).powi(2))
-                                .sum::<f32>()
-                                / segment_energy.len() as f32;
-                            (variance.sqrt() * 10.0).min(1.0)
-                        } else {
-                            0.0
+            let similarity_band: Vec<f32> = phonemes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    // Use energy variance as a proxy for similarity - higher variance = more interesting segments
+                    let start_frame = (i * SEGMENT_FRAMES).min(energy_frames.len());
+                    let end_frame = ((i + 1) * SEGMENT_FRAMES).min(energy_frames.len());
+                    if start_frame < end_frame {
+                        let segment_energy = &energy_frames[start_frame..end_frame];
+                        if segment_energy.is_empty() {
+                            return 0.0;
                         }
-                    })
-                    .collect();
-            
+                        let mean = segment_energy.iter().sum::<f32>() / segment_energy.len() as f32;
+                        let variance = segment_energy
+                            .iter()
+                            .map(|&e| (e - mean).powi(2))
+                            .sum::<f32>()
+                            / segment_energy.len() as f32;
+                        (variance.sqrt() * 10.0).min(1.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect();
+
             Ok(AlignmentReport {
                 phonemes,
                 total_duration: Duration::from_millis(total_duration_ms),
                 reference_path_cost: 0.0,
                 learner_path_cost: 0.0,
                 global_time_offset_ms: 0.0,
+                learner_offset_ms: 0.0,
                 confidence: 1.0, // Reference is always "perfect" to itself
                 reference_energy: ref_features.energy.to_vec(),
                 learner_energy: Vec::new(), // No learner audio yet
-                similarity_band, // Computed from energy variance
-                contour_band, // Computed from pitch contour
+                similarity_band,            // Computed from energy variance
+                contour_band,               // Computed from pitch contour
                 reference_pitch: ref_features.pitch_contour.to_vec(),
                 learner_pitch: Vec::new(), // No learner audio yet
             })
         }
 
-        pub fn get_reference_features(&self, variant: ClipVariant) -> Result<&PronunciationFeatures> {
+        pub fn get_reference_features(
+            &self,
+            variant: ClipVariant,
+        ) -> Result<&PronunciationFeatures> {
             self.reference_features_cache.get(&variant).ok_or_else(|| {
                 PronunciationError::new(format!("cache miss for variant: {:?}", variant))
             })
@@ -990,7 +1070,8 @@ pub mod engine {
             }
             // Compute features on demand - no pre-computation, no fake initialization
             let reference_features = self.extract_features_lazy(clip, variant, progress)?;
-            self.reference_features_cache.insert(variant, reference_features);
+            self.reference_features_cache
+                .insert(variant, reference_features);
             Ok(())
         }
 
@@ -1048,7 +1129,7 @@ pub mod engine {
         pub fn set_active_clip(&mut self, variant: ClipVariant) {
             self.active_clip = variant;
             // Reset processing state when switching clips so we can process again with the new clip
-            self.last_processed_buffer_size = None;
+            self.last_processed_ingested_samples = None;
         }
 
         pub fn clip(&self, variant: ClipVariant) -> Result<&RecordedClip> {
@@ -1088,6 +1169,10 @@ pub mod engine {
         }
 
         fn process_chunk(&mut self, chunk: Vec<f32>) -> Result<Option<SnapshotUpdate>> {
+            if self.warmup_active {
+                self.reset_processing_state();
+                return Ok(None);
+            }
             let capture_rate = self
                 .capture
                 .sample_rate()
@@ -1102,95 +1187,25 @@ pub mod engine {
             );
             let resampled = resample::linear_resample(&chunk, capture_rate, TARGET_SAMPLE_RATE)
                 .map_err(|err| PronunciationError::new(err.to_string()))?;
-            let (resampled_rms, resampled_peak) = compute_audio_metrics(&resampled);
-            info!(
-                resampled_size = resampled.len(),
-                resampled_rms = resampled_rms,
-                resampled_peak = resampled_peak,
-                "chunk resampled"
-            );
-            // Apply gain amplification to boost low-level signals for better pitch detection
-            // macOS cpal provides very low levels (~0.0004 RMS), need significant boost
-            const GAIN_MULTIPLIER: f32 = 100.0; // Boost by 100x (40dB) to compensate for low system levels
-            const MAX_PEAK_AFTER_GAIN: f32 = 0.95; // Prevent clipping
-            let amplified: Vec<f32> = resampled
-                .iter()
-                .map(|&s| (s * GAIN_MULTIPLIER).clamp(-MAX_PEAK_AFTER_GAIN, MAX_PEAK_AFTER_GAIN))
-                .collect();
-            let (amplified_rms, amplified_peak) = compute_audio_metrics(&amplified);
-            info!(
-                amplified_rms = amplified_rms,
-                amplified_peak = amplified_peak,
-                "chunk amplified"
-            );
-            let active_clip = self.active_clip_handle()?.clone();
-            let max_samples = self.max_samples(&active_clip);
-            let buffer_size_before = self.learner_buffer.len();
-            append_limited(&mut self.learner_buffer, &amplified, max_samples);
-            let buffer_size_after = self.learner_buffer.len();
-            let samples_added = buffer_size_after.saturating_sub(buffer_size_before);
-            if buffer_size_after != buffer_size_before + amplified.len() {
-                info!(
-                    trimmed_samples = (buffer_size_before + amplified.len()) - buffer_size_after,
-                    samples_added = samples_added,
-                    amplified_samples = amplified.len(),
-                    "learner buffer trimmed"
-                );
-            } else {
-                info!(
-                    samples_added = samples_added,
-                    buffer_size_before = buffer_size_before,
-                    buffer_size_after = buffer_size_after,
-                    "learner buffer updated"
-                );
-            }
-            // CRITICAL BUG FIX: We were processing the buffer too early (0.1s minimum) and too frequently.
-            // Pitch detection needs at least 0.5-1 second of audio to reliably detect voice.
-            // Process only when we have enough samples (at least 1 second) AND enough new audio has accumulated.
-            // For tests, use a lower threshold to allow processing with shorter audio clips.
-            #[cfg(test)]
-            const MIN_PROCESSING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 10; // Use original minimum for tests (0.1s)
-            #[cfg(not(test))]
-            const MIN_PROCESSING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize; // 1 second minimum for reliable pitch detection
-            #[cfg(not(test))]
-            const PROCESS_INTERVAL_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 2; // Process every 0.5 seconds of new audio
-            let should_process = if buffer_size_after >= MIN_PROCESSING_SAMPLES {
-                // Track last processed size to only process when we have enough NEW audio
-                #[cfg(not(test))]
-                let last_processed = self.last_processed_buffer_size.unwrap_or(0);
-                // For tests, process immediately when threshold is reached (no interval requirement)
-                #[cfg(test)]
-                let has_enough_new_audio = true;
-                #[cfg(not(test))]
-                let has_enough_new_audio = {
-                    let new_audio_since_last = buffer_size_after.saturating_sub(last_processed);
-                    new_audio_since_last >= PROCESS_INTERVAL_SAMPLES
-                };
-                
-                if has_enough_new_audio {
-                    self.last_processed_buffer_size = Some(buffer_size_after);
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            
-            if !should_process {
+            let (resampled_rms, _) = self.log_resampled_chunk(&resampled);
+            self.ingest_resampled_chunk(&resampled, resampled_rms)?;
+            if !self.should_process_buffer() {
                 return Ok(None);
             }
             let start = Instant::now();
-            let (buffer_rms, buffer_peak) = compute_audio_metrics(&self.learner_buffer);
-            info!(
-                learner_buffer_samples = self.learner_buffer.len(),
-                learner_buffer_rms = buffer_rms,
-                learner_buffer_peak = buffer_peak,
-                "alignment computation starting"
-            );
-            // Extract features from current learner audio
-            // CRITICAL: Verify we're using the actual current buffer, not stale data
-            let buffer_copy = self.learner_buffer.clone();
+            let (start_idx, mut buffer_copy) = self.build_processing_buffer();
+            let trimmed_samples = self.trim_processing_buffer(&mut buffer_copy);
+            if trimmed_samples > 0 {
+                let trimmed_ms = samples_to_ms(trimmed_samples);
+                self.pending_offset_ms += trimmed_ms;
+                self.drop_buffer_range(start_idx, trimmed_samples);
+                info!(
+                    trimmed_samples,
+                    trimmed_ms,
+                    pending_offset_ms = self.pending_offset_ms,
+                    "trimmed leading silence from processing buffer"
+                );
+            }
             let buffer_sample_preview: Vec<f32> = buffer_copy.iter().take(20).copied().collect();
             let buffer_nonzero = buffer_copy.iter().filter(|&&s| s.abs() > 0.001).count();
             info!(
@@ -1227,9 +1242,10 @@ pub mod engine {
             // Ensure reference features are cached, then get them for alignment
             // CRITICAL: Pass clip from EngineRunner (single source of truth), not stored in SessionEngine
             // No progress callback during shadowing - compute synchronously
+            let active_clip = self.active_clip_handle()?.clone();
             self.ensure_features(self.active_clip, &active_clip, None)?;
             let ref_features = self.get_reference_features(self.active_clip)?;
-            let alignment = match self.aligner.align(ref_features, &features) {
+            let mut alignment = match self.aligner.align(ref_features, &features) {
                 Ok(align) => align,
                 Err(e) => {
                     warn!(
@@ -1239,9 +1255,33 @@ pub mod engine {
                         "alignment failed - returning default to avoid showing invalid data"
                     );
                     // Return default alignment (empty) instead of showing invalid high similarity scores
+                    info!(
+                        file = "session.rs",
+                        line = 1236,
+                        "alignment defaulted; bands empty"
+                    );
                     AlignmentReport::default()
                 }
             };
+            if alignment.similarity_band.is_empty() {
+                warn!(
+                    file = "session.rs",
+                    line = 1241,
+                    "alignment produced empty similarity band"
+                );
+            }
+            let learner_offset = self.applied_offset_ms + self.pending_offset_ms;
+            info!(
+                file = "session.rs",
+                line = 1246,
+                similarity_band_len = alignment.similarity_band.len(),
+                contour_band_len = alignment.contour_band.len(),
+                learner_offset_frames = (learner_offset / 10.0).round() as i32,
+                "alignment bands ready for UI"
+            );
+            Self::apply_learner_offset(&mut alignment, learner_offset);
+            self.applied_offset_ms = learner_offset;
+            self.pending_offset_ms = 0.0;
             let scores = self.metrics.score(&alignment)?;
             let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
             let similarity_avg = if alignment.similarity_band.is_empty() {
@@ -1289,8 +1329,182 @@ pub mod engine {
             reference_clip.samples.len() + TARGET_SAMPLE_RATE as usize / 2
         }
 
+        fn log_resampled_chunk(&self, samples: &[f32]) -> (f32, f32) {
+            if samples.is_empty() {
+                return (0.0, 0.0);
+            }
+            let (rms, peak) = compute_audio_metrics(samples);
+            info!(
+                resampled_size = samples.len(),
+                resampled_rms = rms,
+                resampled_peak = peak,
+                "chunk resampled"
+            );
+            (rms, peak)
+        }
+
+        fn ingest_resampled_chunk(&mut self, samples: &[f32], resampled_rms: f32) -> Result<()> {
+            if samples.is_empty() {
+                return Ok(());
+            }
+            if !self.voice_detected && resampled_rms < MIN_SIGNAL_RMS {
+                let duration_ms = samples_to_ms(samples.len());
+                self.pending_offset_ms += duration_ms;
+                info!(
+                    pending_offset_ms = self.pending_offset_ms,
+                    chunk_duration_ms = duration_ms,
+                    "chunk below signal threshold; accumulating offset"
+                );
+                return Ok(());
+            }
+            let amplified = apply_adaptive_gain(samples);
+            if amplified.is_empty() {
+                return Ok(());
+            }
+            self.append_amplified_chunk(&amplified)?;
+            self.track_voiced_samples(amplified.len());
+            Ok(())
+        }
+
+        fn append_amplified_chunk(&mut self, samples: &[f32]) -> Result<()> {
+            let active_clip = self.active_clip_handle()?.clone();
+            let max_samples = self.max_samples(&active_clip);
+            let before = self.learner_buffer.len();
+            append_limited(&mut self.learner_buffer, samples, max_samples);
+            let after = self.learner_buffer.len();
+            self.ingested_samples = self.ingested_samples.saturating_add(samples.len());
+            if after != before + samples.len() {
+                info!(
+                    trimmed_samples = (before + samples.len()) - after,
+                    samples_added = after.saturating_sub(before),
+                    "learner buffer trimmed"
+                );
+            } else {
+                info!(
+                    samples_added = after.saturating_sub(before),
+                    buffer_size_before = before,
+                    buffer_size_after = after,
+                    "learner buffer updated"
+                );
+            }
+            Ok(())
+        }
+
+        fn track_voiced_samples(&mut self, appended: usize) {
+            if !self.voice_detected {
+                self.voice_detected = true;
+                self.voiced_samples_since_detection = 0;
+                info!("voice detected; starting processing");
+            }
+            self.voiced_samples_since_detection =
+                self.voiced_samples_since_detection.saturating_add(appended);
+        }
+
+        fn should_process_buffer(&mut self) -> bool {
+            if !self.voice_detected || self.learner_buffer.is_empty() {
+                return false;
+            }
+            let required = ms_to_samples(MIN_SPEECH_DURATION_MS);
+            if self.voiced_samples_since_detection < required {
+                debug!(
+                    voiced_samples = self.voiced_samples_since_detection,
+                    min_voiced_samples = required,
+                    "waiting for minimum speech duration before processing"
+                );
+                return false;
+            }
+            let buffer_len = self.learner_buffer.len();
+            #[cfg(test)]
+            {
+                let ready = buffer_len >= TARGET_SAMPLE_RATE as usize / 10;
+                if ready {
+                    self.last_processed_ingested_samples = Some(self.ingested_samples);
+                }
+                return ready;
+            }
+            #[cfg(not(test))]
+            {
+                const MIN_PROCESSING_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 2;
+                const PROCESS_INTERVAL_SAMPLES: usize = TARGET_SAMPLE_RATE as usize / 2;
+                if buffer_len < MIN_PROCESSING_SAMPLES {
+                    return false;
+                }
+                let last = self.last_processed_ingested_samples.unwrap_or(0);
+                let new_audio = self.ingested_samples.saturating_sub(last);
+                if new_audio < PROCESS_INTERVAL_SAMPLES {
+                    return false;
+                }
+                self.last_processed_ingested_samples = Some(self.ingested_samples);
+                true
+            }
+        }
+
+        fn build_processing_buffer(&self) -> (usize, Vec<f32>) {
+            let window_samples = ms_to_samples(MAX_PROCESSING_WINDOW_MS).max(1);
+            let start = self.learner_buffer.len().saturating_sub(window_samples);
+            (start, self.learner_buffer[start..].to_vec())
+        }
+
+        fn trim_processing_buffer(&self, buffer: &mut Vec<f32>) -> usize {
+            if buffer.len() < SILENCE_WINDOW_SAMPLES {
+                return 0;
+            }
+            let mut drop = 0;
+            while drop + SILENCE_WINDOW_SAMPLES <= buffer.len() {
+                let window = &buffer[drop..drop + SILENCE_WINDOW_SAMPLES];
+                let (rms, _) = compute_audio_metrics(window);
+                if rms >= MIN_SIGNAL_RMS {
+                    break;
+                }
+                drop += SILENCE_WINDOW_SAMPLES;
+            }
+            if drop > 0 {
+                buffer.drain(0..drop);
+            }
+            drop
+        }
+
+        fn drop_buffer_range(&mut self, start: usize, len: usize) {
+            if len == 0 || start >= self.learner_buffer.len() {
+                return;
+            }
+            let end = (start + len).min(self.learner_buffer.len());
+            self.learner_buffer.drain(start..end);
+        }
+
+        fn reset_processing_state(&mut self) {
+            self.learner_buffer.clear();
+            self.pending_offset_ms = 0.0;
+            self.applied_offset_ms = 0.0;
+            self.voice_detected = false;
+            self.voiced_samples_since_detection = 0;
+            self.ingested_samples = 0;
+            self.last_processed_ingested_samples = None;
+        }
+
         fn active_clip_handle(&self) -> Result<&RecordedClip> {
             self.clip(self.active_clip)
+        }
+
+        fn apply_learner_offset(report: &mut AlignmentReport, offset_ms: f32) {
+            report.learner_offset_ms = offset_ms;
+            if report.learner_offset_ms == 0.0 {
+                return;
+            }
+            for phoneme in &mut report.phonemes {
+                phoneme.learner_start_ms += report.learner_offset_ms;
+                phoneme.learner_end_ms += report.learner_offset_ms;
+            }
+        }
+
+        pub fn begin_warmup(&mut self) {
+            self.warmup_active = true;
+            self.reset_processing_state();
+        }
+
+        pub fn finish_warmup(&mut self) {
+            self.warmup_active = false;
+            self.reset_processing_state();
         }
     }
 
@@ -1316,8 +1530,7 @@ pub mod engine {
                 .unwrap_or(false)
             {
                 info!("creating mock capture source for tests");
-                let mock =
-                    MockCapture::from_samples(settings.sample_rate, Vec::new(), 0);
+                let mock = MockCapture::from_samples(settings.sample_rate, Vec::new(), 0);
                 return Ok(Self {
                     backend: LiveCaptureBackend::Mock(mock),
                 });
@@ -1430,6 +1643,60 @@ pub mod engine {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn apply_offset_updates_learner_timings() {
+            let mut report = AlignmentReport {
+                phonemes: vec![AlignedPhoneme {
+                    symbol: "A".to_string(),
+                    reference_start_ms: 0.0,
+                    reference_end_ms: 40.0,
+                    learner_start_ms: 5.0,
+                    learner_end_ms: 45.0,
+                    timing_delta_ms: 0.0,
+                    similarity: 0.9,
+                    articulation_variance: 0.1,
+                    contour_similarity: 0.85,
+                }],
+                ..AlignmentReport::default()
+            };
+            SessionEngine::<MockCapture>::apply_learner_offset(&mut report, 120.0);
+            assert_eq!(report.learner_offset_ms, 120.0);
+            assert_eq!(report.phonemes[0].learner_start_ms, 125.0);
+            assert_eq!(report.phonemes[0].learner_end_ms, 165.0);
+        }
+
+        #[test]
+        fn adaptive_gain_boosts_quiet_signal_without_clipping() {
+            let samples = vec![0.001; 160];
+            let adjusted = apply_adaptive_gain(&samples);
+            assert_eq!(adjusted.len(), samples.len());
+            assert!(
+                adjusted
+                    .iter()
+                    .all(|&sample| sample.abs() > 0.001 && sample.abs() < 0.95),
+                "adaptive gain should boost quiet samples without clipping"
+            );
+        }
+
+        #[test]
+        fn adaptive_gain_limits_hot_signal() {
+            let samples = vec![0.8, -0.8, 0.9, -0.9];
+            let adjusted = apply_adaptive_gain(&samples);
+            assert!(
+                adjusted.iter().all(|&sample| sample.abs() <= 0.95),
+                "adaptive gain should limit hot samples"
+            );
+            assert!(
+                adjusted.iter().any(|&sample| sample.abs() < 0.9),
+                "adaptive gain should reduce amplitude when limiting"
+            );
+        }
+    }
 }
 
 struct EngineRunner {
@@ -1437,6 +1704,9 @@ struct EngineRunner {
     initial_snapshot: SessionSnapshot,
     playback_sink: Option<Sink>,
     _playback_stream: Option<OutputStream>, // Keep stream alive during playback
+    warmup_deadline: Option<Instant>,
+    pending_playback: Option<(Vec<f32>, u32)>,
+    mic_warmup_duration: Duration,
 }
 
 impl EngineRunner {
@@ -1459,8 +1729,9 @@ impl EngineRunner {
             latency_ms = ?config.capture.latency_ms,
             "creating live capture source"
         );
-        let capture = engine::LiveCaptureSource::new(&config.capture)
-            .map_err(|err| PronunciationError::new(format!("failed to create live capture: {}", err)))?;
+        let capture = engine::LiveCaptureSource::new(&config.capture).map_err(|err| {
+            PronunciationError::new(format!("failed to create live capture: {}", err))
+        })?;
         info!("creating session engine (this will extract features from reference)");
         progress.stage(InitializationStage::ExtractingReferenceFeatures);
         let mut feature_progress = |event: FeatureExtractionEvent| {
@@ -1502,13 +1773,14 @@ impl EngineRunner {
             reference_path_cost: 0.0,
             learner_path_cost: 0.0,
             global_time_offset_ms: 0.0,
+            learner_offset_ms: 0.0,
             confidence: 0.0,
             reference_energy: ref_features.energy.to_vec(), // UI needs this for waveform display
-            learner_energy: Vec::new(), // No learner audio yet
-            similarity_band: Vec::new(), // No alignment yet
-            contour_band: Vec::new(), // No alignment yet
+            learner_energy: Vec::new(),                     // No learner audio yet
+            similarity_band: Vec::new(),                    // No alignment yet
+            contour_band: Vec::new(),                       // No alignment yet
             reference_pitch: ref_features.pitch_contour.to_vec(), // UI needs this for pitch contour display
-            learner_pitch: Vec::new(), // No learner audio yet
+            learner_pitch: Vec::new(),                            // No learner audio yet
         };
         let mut initial_snapshot = SessionSnapshot::default()
             .with_alignment(initial_alignment, PronunciationScores::default())
@@ -1524,6 +1796,9 @@ impl EngineRunner {
             initial_snapshot,
             playback_sink: None,
             _playback_stream: None,
+            warmup_deadline: None,
+            pending_playback: None,
+            mic_warmup_duration: mic_warmup_duration(),
         })
     }
 
@@ -1535,6 +1810,39 @@ impl EngineRunner {
     ) -> Result<RecordedClip> {
         let reference = self.engine.reference_clip();
         apply_recipe_to_range(reference, range_start, range_end, recipe)
+    }
+
+    fn prepare_playback(&self, variant: ClipVariant) -> Result<(Vec<f32>, u32)> {
+        let clip = self.engine.clip(variant)?;
+        Ok((duplicate_to_stereo(&clip.samples), clip.sample_rate))
+    }
+
+    fn start_pending_playback(&mut self) -> Result<()> {
+        if let Some((samples, rate)) = self.pending_playback.take() {
+            info!("starting reference playback");
+            self.start_playback_with_samples(samples, rate)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn complete_warmup(
+        &mut self,
+        updates: &Sender<SessionSnapshot>,
+        snapshot: &mut SessionSnapshot,
+    ) -> Result<()> {
+        self.warmup_deadline = None;
+        self.engine.finish_warmup();
+        self.start_pending_playback()?;
+        let mut update = snapshot
+            .clone()
+            .with_warmup_status(false, None)
+            .with_recording(snapshot.recording, true);
+        update.active_clip_variant = snapshot.active_clip_variant;
+        update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
+        *snapshot = update.clone();
+        let _ = updates.send(update);
+        Ok(())
     }
 
     fn cache_and_activate_flowalyzed(
@@ -1822,24 +2130,41 @@ impl EngineRunner {
         // Preserve snapshot's variant and flowalyzed state, don't overwrite
         start_update.active_clip_variant = snapshot.active_clip_variant;
         start_update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
-        let _ = updates.send(start_update);
-        info!("starting reference playback");
-        // Get clip from snapshot variant (source of truth) and prepare samples
-        let (stereo_samples, sample_rate) = match self.engine.clip(snapshot.active_clip_variant) {
-            Ok(clip) => (duplicate_to_stereo(&clip.samples), clip.sample_rate),
-            Err(err) => {
-                error!(error = %err, "failed to get clip for playback");
+        start_update.reference_playing = false;
+
+        let (stereo_samples, sample_rate) =
+            match self.prepare_playback(snapshot.active_clip_variant) {
+                Ok(data) => data,
+                Err(err) => {
+                    error!(error = %err, "failed to get clip for playback");
+                    self.engine.stop(snapshot);
+                    emit_error(updates, snapshot, err.to_string());
+                    return LoopExit::Finished;
+                }
+            };
+        self.pending_playback = Some((stereo_samples, sample_rate));
+
+        if self.mic_warmup_duration.is_zero() {
+            if let Err(err) = self.start_pending_playback() {
+                error!(error = %err, "failed to start reference playback");
                 self.engine.stop(snapshot);
                 emit_error(updates, snapshot, err.to_string());
                 return LoopExit::Finished;
             }
-        };
-        if let Err(err) = self.start_playback_with_samples(stereo_samples, sample_rate) {
-            error!(error = %err, "failed to start reference playback");
-            self.engine.stop(snapshot);
-            emit_error(updates, snapshot, err.to_string());
-            return LoopExit::Finished;
+            start_update.reference_playing = true;
+            start_update = start_update.with_warmup_status(false, None);
+        } else {
+            self.engine.begin_warmup();
+            self.warmup_deadline = Some(Instant::now() + self.mic_warmup_duration);
+            let remaining_ms = self.mic_warmup_duration.as_millis() as u32;
+            start_update = start_update.with_warmup_status(true, Some(remaining_ms));
+            info!(
+                warmup_ms = remaining_ms,
+                "microphone warming up before playback"
+            );
         }
+        let _ = updates.send(start_update.clone());
+        *snapshot = start_update;
         info!("recording session active; entering drive loop");
         self.drive(commands, updates, snapshot)
     }
@@ -1851,6 +2176,20 @@ impl EngineRunner {
         snapshot: &mut SessionSnapshot,
     ) -> LoopExit {
         loop {
+            if let Some(deadline) = self.warmup_deadline {
+                if Instant::now() >= deadline {
+                    match self.complete_warmup(updates, snapshot) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            error!(error = %err, "failed to start playback after warmup");
+                            self.engine.stop(snapshot);
+                            self.stop_playback();
+                            emit_error(updates, snapshot, err.to_string());
+                            return LoopExit::Finished;
+                        }
+                    }
+                }
+            }
             if let Some(command) = poll_command(commands) {
                 match command {
                     SessionCommand::Shutdown => {
@@ -1860,6 +2199,8 @@ impl EngineRunner {
                         update.active_clip_variant = snapshot.active_clip_variant;
                         update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
                         self.stop_playback();
+                        self.warmup_deadline = None;
+                        self.pending_playback = None;
                         let _ = updates.send(update);
                         return LoopExit::Shutdown;
                     }
@@ -1870,6 +2211,8 @@ impl EngineRunner {
                         update.active_clip_variant = snapshot.active_clip_variant;
                         update.has_flowalyzed_clip = snapshot.has_flowalyzed_clip;
                         self.stop_playback();
+                        self.warmup_deadline = None;
+                        self.pending_playback = None;
                         let _ = updates.send(update);
                         return LoopExit::Finished;
                     }
@@ -1950,6 +2293,17 @@ fn append_limited(buffer: &mut Vec<f32>, chunk: &[f32], max_samples: usize) {
         let excess = buffer.len() - max_samples;
         buffer.drain(0..excess);
     }
+}
+
+fn samples_to_ms(samples: usize) -> f32 {
+    samples as f32 / TARGET_SAMPLE_RATE as f32 * 1000.0
+}
+
+fn ms_to_samples(ms: f32) -> usize {
+    if ms <= 0.0 {
+        return 0;
+    }
+    ((ms / 1000.0) * TARGET_SAMPLE_RATE as f32).round() as usize
 }
 
 fn poll_command(commands: &Receiver<SessionCommand>) -> Option<SessionCommand> {

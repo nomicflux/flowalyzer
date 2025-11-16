@@ -29,23 +29,33 @@ impl<'a> SpectrogramView<'a> {
     pub fn show(self, ui: &mut egui::Ui) {
         if let Some(data) = self.data {
             if data.is_empty() {
+                tracing::warn!(
+                    file = "spectrogram.rs",
+                    line = 13,
+                    "SpectrogramView received empty data"
+                );
                 ui.label("Spectrogram unavailable");
             } else {
                 // Show overall summary first
                 let (avg_similarity, avg_contour) = calculate_averages(data);
                 let overall_match = (avg_similarity + avg_contour) / 2.0;
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("Overall match: {:.0}%", (overall_match * 100.0)))
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Overall match: {:.0}%",
+                            (overall_match * 100.0)
+                        ))
                         .size(16.0)
-                        .color(color_for_value(overall_match)));
+                        .color(color_for_value(overall_match)),
+                    );
                     ui.separator();
                     ui.label(format!("Pronunciation: {:.0}%", (avg_similarity * 100.0)));
                     ui.label(format!("Pitch: {:.0}%", (avg_contour * 100.0)));
                 });
-                
+
                 // Show simplified visualization - aggregate into fewer, larger segments
                 paint_spectrogram_simplified(ui, data);
-                
+
                 // Show legend
                 ui.horizontal(|ui| {
                     ui.label("Match quality:");
@@ -60,6 +70,11 @@ impl<'a> SpectrogramView<'a> {
                 });
             }
         } else {
+            tracing::warn!(
+                file = "spectrogram.rs",
+                line = 30,
+                "SpectrogramView missing data"
+            );
             ui.label("Spectrogram unavailable");
         }
     }
@@ -73,7 +88,7 @@ fn calculate_averages(data: &SpectrogramData) -> (f32, f32) {
     let mut contour_sum = 0.0;
     let mut similarity_count = 0;
     let mut contour_count = 0;
-    
+
     for col in 0..data.cols {
         let sim = data.value(0, col);
         let cont = data.value(1, col);
@@ -86,9 +101,17 @@ fn calculate_averages(data: &SpectrogramData) -> (f32, f32) {
             contour_count += 1;
         }
     }
-    
-    let avg_sim = if similarity_count > 0 { similarity_sum / similarity_count as f32 } else { 0.0 };
-    let avg_cont = if contour_count > 0 { contour_sum / contour_count as f32 } else { 0.0 };
+
+    let avg_sim = if similarity_count > 0 {
+        similarity_sum / similarity_count as f32
+    } else {
+        0.0
+    };
+    let avg_cont = if contour_count > 0 {
+        contour_sum / contour_count as f32
+    } else {
+        0.0
+    };
     (avg_sim, avg_cont)
 }
 
@@ -97,7 +120,7 @@ fn paint_spectrogram_simplified(ui: &mut egui::Ui, data: &SpectrogramData) {
     const MAX_SEGMENTS: usize = 20;
     let segments = data.cols.min(MAX_SEGMENTS);
     let samples_per_segment = (data.cols as f32 / segments as f32).ceil() as usize;
-    
+
     let label_width = 100.0;
     let heatmap_width = ui.available_width() - label_width;
     let size = egui::vec2(heatmap_width, 120.0);
@@ -136,7 +159,7 @@ fn paint_spectrogram_simplified(ui: &mut egui::Ui, data: &SpectrogramData) {
                 }
             }
             let avg_value = if count > 0 { sum / count as f32 } else { 0.0 };
-            
+
             let color = color_for_value(avg_value);
             let pos = response.rect.min + egui::vec2(seg as f32 * cell_w, row as f32 * cell_h);
             let cell = egui::Rect::from_min_size(pos, egui::vec2(cell_w, cell_h));
@@ -144,7 +167,6 @@ fn paint_spectrogram_simplified(ui: &mut egui::Ui, data: &SpectrogramData) {
         }
     }
 }
-
 
 fn color_for_value(value: f32) -> egui::Color32 {
     // Color scheme: Blue (excellent) -> Green (good) -> Yellow (medium) -> Red (poor)

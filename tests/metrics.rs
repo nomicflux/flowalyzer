@@ -12,6 +12,7 @@ fn make_report(phonemes: Vec<AlignedPhoneme>, confidence: f32) -> AlignmentRepor
         reference_path_cost: 0.5,
         learner_path_cost: 0.5,
         global_time_offset_ms: 0.0,
+        learner_offset_ms: 0.0,
         confidence,
         reference_energy: vec![0.8, 0.7, 0.75],
         learner_energy: vec![0.8, 0.7, 0.75],

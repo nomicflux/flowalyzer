@@ -16,14 +16,17 @@ pub struct ControlStrip {
     pub latency_budget_ms: u32,
     pub active_clip_variant: ClipVariant,
     pub has_flowalyzed_clip: bool,
+    pub warming_up: bool,
 }
 
 impl ControlStrip {
     pub fn show(&self, ui: &mut egui::Ui) -> ControlStripOutput {
         let mut output = ControlStripOutput::default();
-        if record_button(ui, self.is_recording) {
-            output.toggle_recording = true;
-        }
+        ui.add_enabled_ui(!self.warming_up, |ui| {
+            if record_button(ui, self.is_recording) {
+                output.toggle_recording = true;
+            }
+        });
         ui.separator();
         if self.reference_playing {
             if stop_replay_button(ui) {

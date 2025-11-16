@@ -90,15 +90,51 @@ where
             "VERIFY: Audio chunk being passed to pitch estimator"
         );
 
-        let (_timestamps, pitches, voiced_flags, _confidence) = analysis::pyin_pitch_estimator(
+        let (_timestamps, pitches, mut voiced_flags, confidence) = analysis::pyin_pitch_estimator(
             chunk,
             TARGET_SAMPLE_RATE,
             FREQ_MIN,
             FREQ_MAX,
             frame_len,
         );
+        const MIN_PITCH_CONFIDENCE: f64 = 0.2;
+        let mut reclassified = 0usize;
+        for ((flag, &pitch), &conf) in voiced_flags
+            .iter_mut()
+            .zip(pitches.iter())
+            .zip(confidence.iter())
+        {
+            if !*flag && conf >= MIN_PITCH_CONFIDENCE && pitch.is_finite() && pitch > 0.0 {
+                *flag = true;
+                reclassified += 1;
+            }
+        }
+        if reclassified > 0 {
+            info!(
+                reclassified_frames = reclassified,
+                min_confidence = MIN_PITCH_CONFIDENCE,
+                "reclassified voiced frames using PYIN confidence"
+            );
+        }
 
         let chunk_frames = pitches.len();
+        if !voiced_flags.iter().any(|&flag| flag) {
+            let fallback_frames = pitches
+                .iter()
+                .filter(|&&pitch| pitch.is_finite() && pitch > 0.0)
+                .count();
+            if fallback_frames > 0 {
+                info!(
+                    fallback_frames,
+                    "forcing voiced frames because PYIN confidence stayed below threshold"
+                );
+                for (flag, &pitch) in voiced_flags.iter_mut().zip(pitches.iter()) {
+                    if pitch.is_finite() && pitch > 0.0 {
+                        *flag = true;
+                    }
+                }
+            }
+        }
         if chunk_start == 0 {
             all_pitches.extend_from_slice(&pitches);
             all_voiced.extend_from_slice(&voiced_flags);

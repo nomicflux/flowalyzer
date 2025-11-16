@@ -83,7 +83,7 @@ impl SessionApp {
 
     fn sync_visuals(&mut self) {
         self.refresh_selection();
-        
+
         // CRITICAL: Handle two cases:
         // 1. Initial state (no phonemes): Use reference arrays directly for display
         // 2. Shadowing state (has phonemes): Align arrays using phoneme timing
@@ -91,8 +91,8 @@ impl SessionApp {
         let learner_energy = &self.snapshot.alignment.learner_energy;
         let ref_pitch = &self.snapshot.alignment.reference_pitch;
         let learner_pitch = &self.snapshot.alignment.learner_pitch;
-        
-        let (aligned_ref_energy, aligned_learner_energy, aligned_ref_pitch, aligned_learner_pitch) = 
+
+        let (aligned_ref_energy, aligned_learner_energy, aligned_ref_pitch, aligned_learner_pitch) =
             if self.snapshot.alignment.phonemes.is_empty() {
                 // Initial state: No alignment yet, just use reference arrays directly
                 // Learner arrays are empty, so just use reference for display
@@ -104,40 +104,54 @@ impl SessionApp {
                 )
             } else {
                 // Shadowing state: Align arrays using phoneme timing
-                let (ref_e, learner_e) = build_aligned_from_phonemes(&self.snapshot.alignment.phonemes, ref_energy, learner_energy);
-                let (ref_p, learner_p) = build_aligned_from_phonemes(&self.snapshot.alignment.phonemes, ref_pitch, learner_pitch);
+                let (ref_e, learner_e) = build_aligned_from_phonemes(
+                    &self.snapshot.alignment.phonemes,
+                    ref_energy,
+                    learner_energy,
+                );
+                let (ref_p, learner_p) = build_aligned_from_phonemes(
+                    &self.snapshot.alignment.phonemes,
+                    ref_pitch,
+                    learner_pitch,
+                );
                 (ref_e, learner_e, ref_p, learner_p)
             };
-        
+
         // Take the most recent frames
         let ref_window = tail_slice(&aligned_ref_energy, FRAME_WINDOW);
         let learner_window = tail_slice(&aligned_learner_energy, FRAME_WINDOW);
         let ref_pitch_window = tail_slice(&aligned_ref_pitch, FRAME_WINDOW);
         let learner_pitch_window = tail_slice(&aligned_learner_pitch, FRAME_WINDOW);
-        
+
         // Pad to same length
         let max_len = ref_window.len().max(learner_window.len());
         let mut ref_padded = ref_window;
         let mut learner_padded = learner_window;
         ref_padded.resize(max_len, 0.0);
         learner_padded.resize(max_len, 0.0);
-        
+
         let max_pitch_len = ref_pitch_window.len().max(learner_pitch_window.len());
         let mut ref_pitch_padded = ref_pitch_window;
         let mut learner_pitch_padded = learner_pitch_window;
         ref_pitch_padded.resize(max_pitch_len, 0.0);
         learner_pitch_padded.resize(max_pitch_len, 0.0);
-        
+
         self.reference_waveform = normalize_series(ref_padded);
         self.learner_waveform = normalize_series(learner_padded);
         self.reference_pitch = ref_pitch_padded;
         self.learner_pitch = learner_pitch_padded;
         // CRITICAL DEBUG: Log what we're actually displaying to diagnose garbled visualization
-        if !self.snapshot.alignment.reference_energy.is_empty() || !self.snapshot.alignment.learner_energy.is_empty() {
-            let ref_energy_preview: Vec<f32> = self.reference_waveform.iter().take(10).copied().collect();
-            let learner_energy_preview: Vec<f32> = self.learner_waveform.iter().take(10).copied().collect();
-            let ref_pitch_preview: Vec<f32> = self.reference_pitch.iter().take(10).copied().collect();
-            let learner_pitch_preview: Vec<f32> = self.learner_pitch.iter().take(10).copied().collect();
+        if !self.snapshot.alignment.reference_energy.is_empty()
+            || !self.snapshot.alignment.learner_energy.is_empty()
+        {
+            let ref_energy_preview: Vec<f32> =
+                self.reference_waveform.iter().take(10).copied().collect();
+            let learner_energy_preview: Vec<f32> =
+                self.learner_waveform.iter().take(10).copied().collect();
+            let ref_pitch_preview: Vec<f32> =
+                self.reference_pitch.iter().take(10).copied().collect();
+            let learner_pitch_preview: Vec<f32> =
+                self.learner_pitch.iter().take(10).copied().collect();
             tracing::warn!(
                 reference_energy_frames = self.snapshot.alignment.reference_energy.len(),
                 learner_energy_frames = self.snapshot.alignment.learner_energy.len(),
@@ -156,7 +170,7 @@ impl SessionApp {
             );
         }
         self.spectrogram = build_spectrogram_window(&self.snapshot.alignment, FRAME_WINDOW);
-        
+
         // DEBUG: Log spectrogram values to diagnose solid blue bar
         if let Some(ref spec) = self.spectrogram {
             let similarity_preview: Vec<f32> = (0..spec.cols.min(10))
@@ -233,6 +247,7 @@ impl SessionApp {
                     latency_budget_ms: self.latency_budget_ms,
                     active_clip_variant: self.snapshot.active_clip_variant,
                     has_flowalyzed_clip: self.snapshot.has_flowalyzed_clip,
+                    warming_up: self.snapshot.warming_up,
                 };
                 let output = strip.show(ui);
                 actions.merge(output.into());
@@ -245,6 +260,14 @@ impl SessionApp {
                 ui.label("Shortcuts: Space toggles recording · R replays the reference clip.");
                 ui.label(self.playback_status());
                 self.show_latency_guidance(ui);
+                if self.snapshot.warming_up {
+                    let text = if let Some(remaining) = self.snapshot.warmup_remaining_ms {
+                        format!("Microphone warming up… ~{} ms remaining", remaining)
+                    } else {
+                        "Microphone warming up…".to_string()
+                    };
+                    ui.colored_label(egui::Color32::from_rgb(250, 180, 60), text);
+                }
             }
             self.error_banner(ui);
             if let Some(message) = &self.control_error {
@@ -532,6 +555,15 @@ impl SessionApp {
 
     fn show_main(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.snapshot.warming_up {
+                let text = if let Some(remaining) = self.snapshot.warmup_remaining_ms {
+                    format!("Waiting for microphone warmup ({} ms)…", remaining)
+                } else {
+                    "Waiting for microphone warmup…".to_string()
+                };
+                ui.colored_label(egui::Color32::from_rgb(255, 200, 80), text);
+                ui.add_space(8.0);
+            }
             self.show_waveforms(ui);
             ui.separator();
             self.show_pitch(ui);
@@ -546,9 +578,12 @@ impl SessionApp {
     fn show_waveforms(&mut self, ui: &mut egui::Ui) {
         egui::Grid::new("waveforms").show(ui, |ui| {
             let total_duration = self.snapshot.alignment.total_duration.as_secs_f64();
-            
+
             // Reference waveform with clear label
-            ui.label(egui::RichText::new("Reference (Native Speaker)").color(egui::Color32::from_rgb(80, 160, 255)));
+            ui.label(
+                egui::RichText::new("Reference (Native Speaker)")
+                    .color(egui::Color32::from_rgb(80, 160, 255)),
+            );
             ui.end_row();
             let mut waveform_view = WaveformView {
                 id: "reference_waveform",
@@ -566,9 +601,12 @@ impl SessionApp {
             }
 
             ui.end_row();
-            
+
             // Learner waveform with clear label
-            ui.label(egui::RichText::new("Your Voice (Shadowing)").color(egui::Color32::from_rgb(250, 120, 120)));
+            ui.label(
+                egui::RichText::new("Your Voice (Shadowing)")
+                    .color(egui::Color32::from_rgb(250, 120, 120)),
+            );
             ui.end_row();
             WaveformView {
                 id: "learner_waveform",
@@ -579,12 +617,21 @@ impl SessionApp {
             }
             .show(ui);
             ui.end_row();
-            
+
             // Show timing info
             if !self.reference_waveform.is_empty() && !self.learner_waveform.is_empty() {
-                let frames_shown = self.reference_waveform.len().min(self.learner_waveform.len());
+                let frames_shown = self
+                    .reference_waveform
+                    .len()
+                    .min(self.learner_waveform.len());
                 let time_shown_ms = frames_shown as f32 * FRAME_HOP_MS;
-                ui.label(egui::RichText::new(format!("Showing last {:.1}s of aligned audio", time_shown_ms / 1000.0)).small());
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Showing last {:.1}s of aligned audio",
+                        time_shown_ms / 1000.0
+                    ))
+                    .small(),
+                );
             }
         });
     }
@@ -685,7 +732,13 @@ impl SessionApp {
         if !self.reference_pitch.is_empty() && !self.learner_pitch.is_empty() {
             let frames_shown = self.reference_pitch.len().min(self.learner_pitch.len());
             let time_shown_ms = frames_shown as f32 * FRAME_HOP_MS;
-            ui.label(egui::RichText::new(format!("Showing last {:.1}s of aligned pitch", time_shown_ms / 1000.0)).small());
+            ui.label(
+                egui::RichText::new(format!(
+                    "Showing last {:.1}s of aligned pitch",
+                    time_shown_ms / 1000.0
+                ))
+                .small(),
+            );
         }
     }
 
@@ -755,24 +808,28 @@ fn build_spectrogram_window(
     alignment: &AlignmentReport,
     max_rows: usize,
 ) -> Option<SpectrogramData> {
-    // Show 2 rows: Similarity and Contour
-    // Each row represents time segments (columns)
-    let similarity_window = tail_slice(&alignment.similarity_band, max_rows);
-    let contour_window = tail_slice(&alignment.contour_band, max_rows);
-    
+    let frame_count = alignment
+        .reference_energy
+        .len()
+        .max(alignment.reference_pitch.len());
+    if frame_count == 0 || max_rows == 0 {
+        return None;
+    }
+    let (similarity_series, contour_series) = project_bands_to_frames(alignment, frame_count);
+    let similarity_window = tail_slice(&similarity_series, max_rows);
+    let contour_window = tail_slice(&contour_series, max_rows);
     if similarity_window.is_empty() && contour_window.is_empty() {
         return None;
     }
-    
-    // Use the length of the longer series, or pad to match
+
     let time_segments = similarity_window.len().max(contour_window.len());
     if time_segments == 0 {
         return None;
     }
-    
+
     // CRITICAL: Check if all values are suspiciously high (>= 0.8) - this indicates a bug
-    let all_high_similarity = !similarity_window.is_empty() && 
-        similarity_window.iter().all(|&v| v >= 0.8);
+    let all_high_similarity =
+        !similarity_window.is_empty() && similarity_window.iter().all(|&v| v >= 0.8);
     if all_high_similarity {
         tracing::warn!(
             similarity_window_len = similarity_window.len(),
@@ -781,23 +838,56 @@ fn build_spectrogram_window(
             "WARNING: All similarity values are >= 0.8 - possible stale/incorrect data"
         );
     }
-    
+
     // Build values: 2 rows (Similarity, Contour) × time_segments columns
     let mut values = Vec::with_capacity(2 * time_segments);
-    
+
     // Row 0: Similarity band
     for i in 0..time_segments {
         let value = similarity_window.get(i).copied().unwrap_or(0.0);
         values.push(value.clamp(0.0, 1.0));
     }
-    
+
     // Row 1: Contour band
     for i in 0..time_segments {
         let value = contour_window.get(i).copied().unwrap_or(0.0);
         values.push(value.clamp(0.0, 1.0));
     }
-    
+
     Some(SpectrogramData::new(2, time_segments, values))
+}
+
+fn project_bands_to_frames(
+    alignment: &AlignmentReport,
+    frame_count: usize,
+) -> (Vec<f32>, Vec<f32>) {
+    let mut similarity_frames = vec![0.0; frame_count];
+    let mut contour_frames = vec![0.0; frame_count];
+    let segment_count = alignment.phonemes.len();
+    for (index, phoneme) in alignment.phonemes.iter().enumerate() {
+        if index >= segment_count {
+            break;
+        }
+        let start_frame = (phoneme.reference_start_ms / FRAME_HOP_MS).floor().max(0.0) as usize;
+        let end_frame = ((phoneme.reference_end_ms / FRAME_HOP_MS).ceil() as usize)
+            .max(start_frame + 1)
+            .min(frame_count);
+        let similarity_value = alignment
+            .similarity_band
+            .get(index)
+            .copied()
+            .unwrap_or(phoneme.similarity);
+        let contour_value = alignment
+            .contour_band
+            .get(index)
+            .copied()
+            .unwrap_or(phoneme.contour_similarity);
+        for frame in start_frame..end_frame {
+            similarity_frames[frame] = similarity_value.clamp(0.0, 1.0);
+            contour_frames[frame] = contour_value.clamp(0.0, 1.0);
+        }
+    }
+    (similarity_frames, contour_frames)
 }
 
 fn build_aligned_from_phonemes(
@@ -809,26 +899,26 @@ fn build_aligned_from_phonemes(
     // Each phoneme tells us which reference frames map to which learner frames
     let mut aligned_ref = Vec::new();
     let mut aligned_learner = Vec::new();
-    
+
     for phoneme in phonemes {
         let ref_start_frame = (phoneme.reference_start_ms / FRAME_HOP_MS) as usize;
         let ref_end_frame = (phoneme.reference_end_ms / FRAME_HOP_MS) as usize;
         let learner_start_frame = (phoneme.learner_start_ms / FRAME_HOP_MS) as usize;
         let learner_end_frame = (phoneme.learner_end_ms / FRAME_HOP_MS) as usize;
-        
+
         // Extract frames for this phoneme
         let ref_frames = if ref_start_frame < reference.len() {
             reference[ref_start_frame..ref_end_frame.min(reference.len())].to_vec()
         } else {
             Vec::new()
         };
-        
+
         let learner_frames = if learner_start_frame < learner.len() {
             learner[learner_start_frame..learner_end_frame.min(learner.len())].to_vec()
         } else {
             Vec::new()
         };
-        
+
         // Align by taking max length and padding/interpolating
         let max_phoneme_len = ref_frames.len().max(learner_frames.len());
         if max_phoneme_len > 0 {
@@ -840,7 +930,7 @@ fn build_aligned_from_phonemes(
             aligned_learner.extend(learner_aligned);
         }
     }
-    
+
     (aligned_ref, aligned_learner)
 }
 
@@ -903,6 +993,71 @@ fn show_staged_recipe_message(ui: &mut egui::Ui) {
 mod tests {
     use super::*;
     use crate::types::{RuntimeRecipe, RuntimeRecipeStep};
+
+    #[test]
+    fn spectrogram_window_respects_learner_offset() {
+        let mut alignment = AlignmentReport::default();
+        alignment.reference_energy = vec![0.0; 6];
+        alignment.reference_pitch = vec![0.0; 6];
+        alignment.similarity_band = vec![0.1, 0.2, 0.3];
+        alignment.contour_band = vec![0.2, 0.3, 0.4];
+        alignment.phonemes = vec![
+            AlignedPhoneme {
+                reference_start_ms: 0.0,
+                reference_end_ms: 20.0,
+                similarity: 0.1,
+                contour_similarity: 0.2,
+                ..AlignedPhoneme::default()
+            },
+            AlignedPhoneme {
+                reference_start_ms: 20.0,
+                reference_end_ms: 40.0,
+                similarity: 0.2,
+                contour_similarity: 0.3,
+                ..AlignedPhoneme::default()
+            },
+            AlignedPhoneme {
+                reference_start_ms: 40.0,
+                reference_end_ms: 60.0,
+                similarity: 0.3,
+                contour_similarity: 0.4,
+                ..AlignedPhoneme::default()
+            },
+        ];
+        let data = build_spectrogram_window(&alignment, 10).expect("window expected");
+        assert_eq!(data.cols, 6);
+        assert!((data.value(0, 0) - 0.1).abs() < f32::EPSILON);
+        assert!((data.value(0, 4) - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn spectrogram_window_handles_large_offset() {
+        let mut alignment = AlignmentReport::default();
+        alignment.reference_energy = vec![0.0; 8];
+        alignment.reference_pitch = vec![0.0; 8];
+        alignment.similarity_band = vec![0.6, 0.7];
+        alignment.contour_band = vec![0.4, 0.5];
+        alignment.phonemes = vec![
+            AlignedPhoneme {
+                reference_start_ms: 30.0,
+                reference_end_ms: 50.0,
+                similarity: 0.6,
+                contour_similarity: 0.4,
+                ..AlignedPhoneme::default()
+            },
+            AlignedPhoneme {
+                reference_start_ms: 50.0,
+                reference_end_ms: 70.0,
+                similarity: 0.7,
+                contour_similarity: 0.5,
+                ..AlignedPhoneme::default()
+            },
+        ];
+        let data = build_spectrogram_window(&alignment, 10).expect("window expected");
+        assert_eq!(data.cols, 8);
+        assert_eq!(data.value(0, 0), 0.0);
+        assert!((data.value(0, 6) - 0.7).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn test_format_recipe_summary() {

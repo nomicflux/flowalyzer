@@ -109,6 +109,7 @@ pub struct AlignmentReport {
     pub reference_path_cost: f32,
     pub learner_path_cost: f32,
     pub global_time_offset_ms: f32,
+    pub learner_offset_ms: f32,
     pub confidence: f32,
     pub reference_energy: Vec<f32>,
     pub learner_energy: Vec<f32>,
