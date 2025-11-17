@@ -1,6 +1,6 @@
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -119,7 +119,7 @@ fn bail_device(name: &str) -> Result<Device> {
     Err(anyhow!("input device '{}' not found", name))
 }
 
-fn build_stream(device: &Device, config: &CaptureConfig) -> Result<StreamSetup> {
+fn build_stream(device: &Device, _config: &CaptureConfig) -> Result<StreamSetup> {
     let supported = device
         .default_input_config()
         .context("failed to query default input config")?;
@@ -133,8 +133,7 @@ fn build_stream(device: &Device, config: &CaptureConfig) -> Result<StreamSetup> 
         is_input = true,
         "configured capture device"
     );
-    let capacity = channel_capacity(stream_config.sample_rate.0, &config.latency_ms);
-    let (sender, receiver) = mpsc::sync_channel::<Vec<f32>>(capacity);
+    let (sender, receiver) = mpsc::channel::<Vec<f32>>();
     let finished = Arc::new(AtomicBool::new(false));
     let stream = build_input_stream(
         device,
@@ -155,7 +154,7 @@ fn build_input_stream(
     device: &Device,
     config: &StreamConfig,
     format: SampleFormat,
-    sender: Arc<SyncSender<Vec<f32>>>,
+    sender: Arc<Sender<Vec<f32>>>,
     finished: Arc<AtomicBool>,
 ) -> Result<Stream> {
     let err_fn = |err| eprintln!("audio input stream error: {}", err);
@@ -245,7 +244,7 @@ fn start_streaming_capture(config: &CaptureConfig) -> Result<StreamSetup> {
 fn emit_chunk_f32(
     data: &[f32],
     channels: usize,
-    sender: &Arc<SyncSender<Vec<f32>>>,
+    sender: &Arc<Sender<Vec<f32>>>,
     finished: &Arc<AtomicBool>,
 ) {
     // Diagnostic logging for raw stream data - log actual sample values to verify what we're receiving
@@ -272,7 +271,7 @@ fn emit_chunk_f32(
 fn emit_chunk_i16(
     data: &[i16],
     channels: usize,
-    sender: &Arc<SyncSender<Vec<f32>>>,
+    sender: &Arc<Sender<Vec<f32>>>,
     finished: &Arc<AtomicBool>,
 ) {
     let mut converted = Vec::with_capacity(data.len());
@@ -285,7 +284,7 @@ fn emit_chunk_i16(
 fn emit_chunk_u16(
     data: &[u16],
     channels: usize,
-    sender: &Arc<SyncSender<Vec<f32>>>,
+    sender: &Arc<Sender<Vec<f32>>>,
     finished: &Arc<AtomicBool>,
 ) {
     let mut converted = Vec::with_capacity(data.len());
@@ -299,7 +298,7 @@ fn emit_chunk_u16(
 fn emit_from_slice(
     data: &[f32],
     channels: usize,
-    sender: &Arc<SyncSender<Vec<f32>>>,
+    sender: &Arc<Sender<Vec<f32>>>,
     finished: &Arc<AtomicBool>,
 ) {
     if finished.load(Ordering::Relaxed) || channels == 0 {
@@ -309,18 +308,7 @@ fn emit_from_slice(
     for frame in data.chunks(channels) {
         mono.push(mix_to_mono(frame));
     }
-    // Use try_send to avoid blocking in the audio callback
-    // If the channel is full or receiver is dropped, we skip this chunk
-    // This prevents blocking the audio thread and allows clean shutdown
-    if sender.try_send(mono).is_err() {
-        // CRITICAL: Chunks are being dropped! This will cause audio to not match what user is saying
-        // Channel full or receiver dropped - this is a serious problem
-        static DROP_WARNED: std::sync::atomic::AtomicBool =
-            std::sync::atomic::AtomicBool::new(false);
-        if !DROP_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            eprintln!("ERROR: Audio chunks are being dropped! Channel is full or receiver disconnected. Audio will not match user's speech.");
-        }
-    }
+    let _ = sender.send(mono);
 }
 
 fn collect_samples(
@@ -358,15 +346,6 @@ fn append_chunk(buffer: &mut Vec<f32>, mut chunk: Vec<f32>, frames_needed: usize
 fn frames_for_duration(duration: Duration, sample_rate: u32) -> usize {
     let frames = duration.as_secs_f64() * sample_rate as f64;
     frames.ceil() as usize
-}
-
-fn channel_capacity(sample_rate: u32, latency_ms: &RangeInclusive<u32>) -> usize {
-    let max_latency = (*latency_ms.end()).max(*latency_ms.start());
-    // Estimate chunks per second: sample_rate / typical_chunk_size (512)
-    let chunks_per_second = sample_rate as f64 / 512.0;
-    // Capacity should hold at least latency_ms worth of chunks, plus some headroom
-    let capacity = (chunks_per_second * max_latency as f64 / 1000.0 * 2.0).ceil() as usize;
-    capacity.max(10) // Minimum 10 chunks to prevent drops
 }
 
 pub fn mix_to_mono(frame: &[f32]) -> f32 {

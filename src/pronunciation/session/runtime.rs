@@ -99,6 +99,9 @@ impl SessionRuntime {
                 Ok(SessionCommand::Stop) => {
                     recording = false;
                     capture = None;
+                    let _ = self
+                        .snapshot_sender
+                        .send(self.build_snapshot(PronunciationScores::default()));
                 }
                 Ok(SessionCommand::Shutdown) => break,
                 Ok(SessionCommand::ReplayReference) => {

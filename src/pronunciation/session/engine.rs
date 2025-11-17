@@ -77,12 +77,8 @@ impl SessionEngine {
     }
 
     fn reference_window(&self, learner_window: &[f32]) -> (Vec<f32>, usize) {
-        let prefix_len = learner_window
-            .len()
-            .saturating_sub(self.chunk_samples);
-        let start = self
-            .global_sample_counter
-            .saturating_sub(prefix_len as u64) as usize;
+        let prefix_len = learner_window.len().saturating_sub(self.chunk_samples);
+        let start = self.global_sample_counter.saturating_sub(prefix_len as u64) as usize;
         let end = (start + learner_window.len()).min(self.reference_samples.len());
         let window = self.reference_samples[start..end].to_vec();
         (window, end.saturating_sub(start))
@@ -108,7 +104,7 @@ impl SessionEngine {
 }
 
 fn prefix_frame_count(chunk_samples: usize) -> usize {
-    (chunk_samples + FRAME_HOP_SAMPLES - 1) / FRAME_HOP_SAMPLES
+    chunk_samples.div_ceil(FRAME_HOP_SAMPLES)
 }
 
 fn trim_prefix(mut frames: FeatureFrames, prefix_frames: usize) -> FeatureFrames {

@@ -20,7 +20,6 @@ struct Args {
     /// Chunk duration in milliseconds (default 100ms)
     #[arg(long, default_value_t = 100)]
     chunk_ms: u32,
-
 }
 
 fn main() -> Result<()> {

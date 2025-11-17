@@ -38,6 +38,11 @@ impl SessionApp {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
+        let variant_changed = snapshot.active_clip_variant != self.snapshot.active_clip_variant;
+        let started_recording = !self.snapshot.recording && snapshot.recording;
+        if variant_changed || started_recording {
+            self.clear_histories();
+        }
         self.histories.accumulate(&snapshot.alignment);
         self.snapshot = snapshot;
         self.reference_ready = true;
@@ -265,12 +270,12 @@ impl HistoryBuffers {
     }
 
     fn accumulate(&mut self, alignment: &AlignmentReport) {
-        append_history(&mut self.reference_energy, &alignment.reference_energy);
-        append_history(&mut self.learner_energy, &alignment.learner_energy);
-        append_history(&mut self.reference_pitch, &alignment.reference_pitch);
-        append_history(&mut self.learner_pitch, &alignment.learner_pitch);
-        append_history(&mut self.similarity, &alignment.similarity_band);
-        append_history(&mut self.contour, &alignment.contour_band);
+        append_chunk(&mut self.reference_energy, &alignment.reference_energy);
+        append_chunk(&mut self.learner_energy, &alignment.learner_energy);
+        append_chunk(&mut self.reference_pitch, &alignment.reference_pitch);
+        append_chunk(&mut self.learner_pitch, &alignment.learner_pitch);
+        append_chunk(&mut self.similarity, &alignment.similarity_band);
+        append_chunk(&mut self.contour, &alignment.contour_band);
     }
 
     fn clear(&mut self) {
@@ -283,15 +288,15 @@ impl HistoryBuffers {
     }
 }
 
-fn append_history(history: &mut VecDeque<f32>, chunk: &[f32]) {
+fn append_chunk(history: &mut VecDeque<f32>, chunk: &[f32]) {
     if chunk.is_empty() {
         return;
     }
     history.extend(chunk);
-    trim_history(history);
+    trim_to_window(history);
 }
 
-fn trim_history(history: &mut VecDeque<f32>) {
+fn trim_to_window(history: &mut VecDeque<f32>) {
     if history.len() > HISTORY_CAPACITY_FRAMES {
         let excess = history.len() - HISTORY_CAPACITY_FRAMES;
         history.drain(0..excess);
@@ -354,5 +359,38 @@ mod tests {
         app.clear_histories();
         assert!(app.histories.reference_energy.is_empty());
         assert!(app.histories.similarity.is_empty());
+    }
+
+    #[test]
+    fn histories_clear_on_variant_toggle() {
+        let mut app = dummy_app();
+        let snapshot = SessionSnapshot {
+            alignment: report_with_value(0.5),
+            ..SessionSnapshot::default()
+        };
+        app.apply_snapshot(snapshot);
+        let toggled = SessionSnapshot {
+            active_clip_variant: ClipVariant::Flowalyzed,
+            ..SessionSnapshot::default()
+        };
+        app.apply_snapshot(toggled);
+        assert!(app.histories.reference_energy.is_empty());
+        assert!(app.histories.similarity.is_empty());
+    }
+
+    #[test]
+    fn histories_clear_on_restart() {
+        let mut app = dummy_app();
+        let snapshot = SessionSnapshot {
+            alignment: report_with_value(0.5),
+            ..SessionSnapshot::default()
+        };
+        app.apply_snapshot(snapshot);
+        let restarted = SessionSnapshot {
+            recording: true,
+            ..SessionSnapshot::default()
+        };
+        app.apply_snapshot(restarted);
+        assert!(app.histories.reference_energy.is_empty());
     }
 }
