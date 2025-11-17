@@ -46,11 +46,9 @@ impl SessionEngine {
     }
 
     pub fn flush_pending(&mut self) -> Option<AlignmentReport> {
-        if let Some(pending) = self.pending_chunk.take() {
-            Some(self.process_now(&pending))
-        } else {
-            None
-        }
+        self.pending_chunk
+            .take()
+            .map(|pending| self.process_now(&pending))
     }
 
     fn process_now(&mut self, learner_samples: &[f32]) -> AlignmentReport {

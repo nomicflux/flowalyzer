@@ -34,12 +34,14 @@ fn main() -> Result<()> {
         None => reference.clone(),
     };
 
-    let mut config = SessionConfig::default();
-    config.chunk_duration_ms = args.chunk_ms.max(10);
-    config.chunk_memory_limit = if args.lookahead {
-        ChunkMemoryLimit::PreviousAndNext
-    } else {
-        ChunkMemoryLimit::PreviousOnly
+    let config = SessionConfig {
+        chunk_duration_ms: args.chunk_ms.max(10),
+        chunk_memory_limit: if args.lookahead {
+            ChunkMemoryLimit::PreviousAndNext
+        } else {
+            ChunkMemoryLimit::PreviousOnly
+        },
+        ..SessionConfig::default()
     };
     let mut engine = SessionEngine::new(&reference.samples, &config);
 

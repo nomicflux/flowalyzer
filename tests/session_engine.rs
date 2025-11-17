@@ -32,8 +32,10 @@ fn engine_reset_clears_offset() {
 
 #[test]
 fn lookahead_mode_delays_first_chunk() {
-    let mut config = SessionConfig::default();
-    config.chunk_memory_limit = ChunkMemoryLimit::PreviousAndNext;
+    let config = SessionConfig {
+        chunk_memory_limit: ChunkMemoryLimit::PreviousAndNext,
+        ..SessionConfig::default()
+    };
     let reference = reference_signal((config.sample_rate * 2) as usize, config.sample_rate);
     let mut engine = SessionEngine::new(&reference, &config);
     let chunk = vec![0.0; engine.chunk_samples()];

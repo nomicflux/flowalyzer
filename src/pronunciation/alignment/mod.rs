@@ -54,7 +54,7 @@ fn pitch_similarity(reference_value: f32, learner_value: f32) -> f32 {
         return 1.0;
     }
     if reference_value == 0.0 || learner_value == 0.0 {
-        return 1.0;
+        return 0.0;
     }
     let ratio = (reference_value / learner_value).abs();
     (ratio.min(1.0 / ratio)).clamp(0.0, 1.0)
