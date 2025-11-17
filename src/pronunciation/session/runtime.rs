@@ -8,17 +8,27 @@ use crate::pronunciation::session::{
     AlignmentReport, ClipVariant, PronunciationScores, SessionConfig, SessionEngine,
     SessionSnapshot,
 };
-use crate::pronunciation::{PronunciationError, RecordedClip, Result};
+use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
+use crate::types::Recipe;
 
 pub enum SessionCommand {
     Start,
     Stop,
     ReplayReference,
     StopReplay,
+    ApplyRecipe {
+        start_sec: f64,
+        end_sec: f64,
+        recipe: Recipe,
+    },
+    ToggleClipVariant(ClipVariant),
     Shutdown,
 }
 
 pub struct SessionRuntime {
+    reference_clip: Arc<RecordedClip>,
+    flowalyzed_clip: Arc<Mutex<Option<RecordedClip>>>,
+    active_variant: Arc<Mutex<ClipVariant>>,
     engine: Arc<Mutex<SessionEngine>>,
     config: SessionConfig,
     snapshot_sender: Sender<SessionSnapshot>,
@@ -32,8 +42,12 @@ impl SessionRuntime {
     ) -> (SessionHandle, SessionController) {
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
+        let reference_clip = Arc::new(reference_clip);
         let engine = SessionEngine::new(&reference_clip.samples, &config);
         let runtime = Self {
+            reference_clip: reference_clip.clone(),
+            flowalyzed_clip: Arc::new(Mutex::new(None)),
+            active_variant: Arc::new(Mutex::new(ClipVariant::Original)),
             engine: Arc::new(Mutex::new(engine)),
             config: config.clone(),
             snapshot_sender: snapshot_tx,
@@ -74,6 +88,14 @@ impl SessionRuntime {
                         .send(self.build_snapshot(PronunciationScores::default()));
                 }
                 Ok(SessionCommand::StopReplay) => {}
+                Ok(SessionCommand::ApplyRecipe {
+                    start_sec,
+                    end_sec,
+                    recipe,
+                }) => self.handle_apply_recipe(start_sec, end_sec, recipe),
+                Ok(SessionCommand::ToggleClipVariant(variant)) => {
+                    self.handle_toggle_variant(variant)
+                }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => break,
             }
@@ -122,8 +144,8 @@ impl SessionRuntime {
             scores,
             recording: false,
             reference_playing: false,
-            active_clip_variant: ClipVariant::Original,
-            has_flowalyzed_clip: false,
+            active_clip_variant: self.current_variant(),
+            has_flowalyzed_clip: self.has_flowalyzed_clip(),
             recipe_state: None,
             error: None,
         }
@@ -135,11 +157,61 @@ impl SessionRuntime {
             scores: PronunciationScores::default(),
             recording,
             reference_playing: false,
-            active_clip_variant: ClipVariant::Original,
-            has_flowalyzed_clip: false,
+            active_clip_variant: self.current_variant(),
+            has_flowalyzed_clip: self.has_flowalyzed_clip(),
             recipe_state: None,
             error: None,
         }
+    }
+
+    fn handle_apply_recipe(&self, start_sec: f64, end_sec: f64, recipe: Recipe) {
+        match apply_recipe_to_range(&self.reference_clip, start_sec, end_sec, &recipe) {
+            Ok(flowalyzed) => {
+                *self.flowalyzed_clip.lock().unwrap() = Some(flowalyzed);
+                let mut snapshot = self.build_snapshot(PronunciationScores::default());
+                snapshot.has_flowalyzed_clip = true;
+                let _ = self.snapshot_sender.send(snapshot);
+            }
+            Err(err) => {
+                let mut snapshot = self.build_snapshot(PronunciationScores::default());
+                snapshot.error = Some(err.to_string());
+                let _ = self.snapshot_sender.send(snapshot);
+            }
+        }
+    }
+
+    fn handle_toggle_variant(&self, variant: ClipVariant) {
+        if variant == self.current_variant() {
+            return;
+        }
+        let clip = match variant {
+            ClipVariant::Original => Some((*self.reference_clip).clone()),
+            ClipVariant::Flowalyzed => self.flowalyzed_clip.lock().unwrap().clone(),
+        };
+        match clip {
+            Some(clip) => {
+                if let Ok(mut engine) = self.engine.lock() {
+                    *engine = SessionEngine::new(&clip.samples, &self.config);
+                }
+                *self.active_variant.lock().unwrap() = variant;
+                let _ = self
+                    .snapshot_sender
+                    .send(self.build_snapshot(PronunciationScores::default()));
+            }
+            None => {
+                let mut snapshot = self.build_snapshot(PronunciationScores::default());
+                snapshot.error = Some("flowalyzed clip not available".to_string());
+                let _ = self.snapshot_sender.send(snapshot);
+            }
+        }
+    }
+
+    fn current_variant(&self) -> ClipVariant {
+        *self.active_variant.lock().unwrap()
+    }
+
+    fn has_flowalyzed_clip(&self) -> bool {
+        self.flowalyzed_clip.lock().unwrap().is_some()
     }
 }
 
@@ -192,6 +264,22 @@ impl SessionController {
     pub fn stop_replay(&self) -> Result<()> {
         self.command_sender
             .send(SessionCommand::StopReplay)
+            .map_err(|_| PronunciationError::new("runtime disconnected"))
+    }
+
+    pub fn apply_recipe(&self, start_sec: f64, end_sec: f64, recipe: Recipe) -> Result<()> {
+        self.command_sender
+            .send(SessionCommand::ApplyRecipe {
+                start_sec,
+                end_sec,
+                recipe,
+            })
+            .map_err(|_| PronunciationError::new("runtime disconnected"))
+    }
+
+    pub fn toggle_clip_variant(&self, variant: ClipVariant) -> Result<()> {
+        self.command_sender
+            .send(SessionCommand::ToggleClipVariant(variant))
             .map_err(|_| PronunciationError::new("runtime disconnected"))
     }
 
