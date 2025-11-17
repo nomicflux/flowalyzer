@@ -14,8 +14,8 @@ fn runtime_spawns_and_shuts_down_without_snapshots_when_never_started() {
 
     let snapshots = handle.drain_snapshots();
     assert!(
-        snapshots.is_empty(),
-        "expected no snapshots when runtime never started"
+        !snapshots.is_empty(),
+        "expected initial snapshot even when runtime never started"
     );
 }
 

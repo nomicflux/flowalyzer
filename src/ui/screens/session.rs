@@ -1,8 +1,12 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::pronunciation::session::{
-    AlignmentReport, SessionConfig, SessionController, SessionHandle, SessionSnapshot,
+    AlignmentReport, ClipVariant, SessionConfig, SessionController, SessionHandle, SessionSnapshot,
 };
+use crate::types::{Recipe, RecipeStep};
+use eframe::egui;
+use eframe::egui::Color32;
 
 const HISTORY_WINDOW_MS: usize = 30_000;
 const FRAME_HOP_MS: usize = 10;
@@ -14,6 +18,9 @@ pub struct SessionApp {
     snapshot: SessionSnapshot,
     control_error: Option<String>,
     histories: HistoryBuffers,
+    recipe_start_input: String,
+    recipe_end_input: String,
+    reference_ready: bool,
 }
 
 impl SessionApp {
@@ -24,20 +31,20 @@ impl SessionApp {
             controller,
             control_error: None,
             histories: HistoryBuffers::new(),
+            recipe_start_input: "0.0".to_string(),
+            recipe_end_input: "2.0".to_string(),
+            reference_ready: false,
         }
     }
 
     pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
         self.histories.accumulate(&snapshot.alignment);
         self.snapshot = snapshot;
+        self.reference_ready = true;
     }
 
     pub fn clear_histories(&mut self) {
         self.histories.clear();
-    }
-
-    pub fn control_error(&self) -> Option<&str> {
-        self.control_error.as_deref()
     }
 
     pub fn snapshot(&self) -> &SessionSnapshot {
@@ -47,11 +54,192 @@ impl SessionApp {
     pub fn config(&self) -> &SessionConfig {
         self.handle.config()
     }
+
+    fn poll_snapshots(&mut self) {
+        for snapshot in self.handle.drain_snapshots() {
+            self.apply_snapshot(snapshot);
+        }
+    }
+
+    fn show_top_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            let label = if self.snapshot.recording {
+                "Stop Recording"
+            } else {
+                "Start Recording"
+            };
+            if ui.button(label).clicked() {
+                self.control_error = if self.snapshot.recording {
+                    self.controller.stop().err().map(|err| err.to_string())
+                } else {
+                    self.controller.start().err().map(|err| err.to_string())
+                };
+            }
+
+            if ui.button("Replay Reference").clicked() {
+                if let Err(err) = self.controller.replay_reference() {
+                    self.control_error = Some(err.to_string());
+                }
+            }
+
+            if self.snapshot.reference_playing && ui.button("Stop Replay").clicked() {
+                if let Err(err) = self.controller.stop_replay() {
+                    self.control_error = Some(err.to_string());
+                }
+            }
+
+            if ui.button("Clear Histories").clicked() {
+                self.clear_histories();
+            }
+        });
+
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            ui.label("Recipe start (s):");
+            ui.text_edit_singleline(&mut self.recipe_start_input);
+            ui.label("end (s):");
+            ui.text_edit_singleline(&mut self.recipe_end_input);
+            if ui.button("Apply Default Recipe").clicked() {
+                match self.parse_recipe_bounds() {
+                    Ok((start, end)) => {
+                        if let Err(err) =
+                            self.controller
+                                .apply_recipe(start, end, Self::default_recipe())
+                        {
+                            self.control_error = Some(err.to_string());
+                        }
+                    }
+                    Err(err) => self.control_error = Some(err),
+                }
+            }
+        });
+
+        ui.separator();
+
+        if self.snapshot.has_flowalyzed_clip {
+            let target = match self.snapshot.active_clip_variant {
+                ClipVariant::Original => ClipVariant::Flowalyzed,
+                ClipVariant::Flowalyzed => ClipVariant::Original,
+            };
+            if ui.button(format!("Switch to {:?}", target)).clicked() {
+                if let Err(err) = self.controller.toggle_clip_variant(target) {
+                    self.control_error = Some(err.to_string());
+                }
+            }
+        } else {
+            ui.label("Flowalyzed clip not available yet.");
+        }
+
+        if let Some(err) = &self.control_error {
+            ui.colored_label(Color32::RED, err);
+        }
+    }
+
+    fn show_status(&self, ui: &mut egui::Ui) {
+        ui.label(format!(
+            "Recording: {}",
+            if self.snapshot.recording { "Yes" } else { "No" }
+        ));
+        ui.label(format!(
+            "Active variant: {:?}",
+            self.snapshot.active_clip_variant
+        ));
+        ui.label(format!(
+            "Flowalyzed available: {}",
+            if self.snapshot.has_flowalyzed_clip {
+                "Yes"
+            } else {
+                "No"
+            }
+        ));
+        ui.label(if self.reference_ready {
+            "Reference features: Ready"
+        } else {
+            "Reference features: Loading..."
+        });
+        ui.label(format!(
+            "Reference playback: {}",
+            if self.snapshot.reference_playing {
+                "Playing"
+            } else {
+                "Stopped"
+            }
+        ));
+        if let Some(error) = &self.snapshot.error {
+            ui.colored_label(Color32::RED, format!("Runtime error: {}", error));
+        }
+        ui.separator();
+        ui.label(format!(
+            "Energy frames stored: {}",
+            self.histories.reference_energy.len()
+        ));
+        ui.label(format!(
+            "Pitch frames stored: {}",
+            self.histories.reference_pitch.len()
+        ));
+    }
+
+    fn show_visualizations(&self, ui: &mut egui::Ui) {
+        ui.label(format!(
+            "Latest energy ref/learner: {:.3} / {:.3}",
+            last_value(&self.histories.reference_energy),
+            last_value(&self.histories.learner_energy)
+        ));
+        ui.label(format!(
+            "Latest pitch ref/learner: {:.3} / {:.3}",
+            last_value(&self.histories.reference_pitch),
+            last_value(&self.histories.learner_pitch)
+        ));
+        ui.label(format!(
+            "Latest similarity/contour: {:.3} / {:.3}",
+            last_value(&self.histories.similarity),
+            last_value(&self.histories.contour)
+        ));
+    }
+
+    fn parse_recipe_bounds(&self) -> Result<(f64, f64), String> {
+        let start = self
+            .recipe_start_input
+            .parse::<f64>()
+            .map_err(|_| "Invalid recipe start".to_string())?;
+        let end = self
+            .recipe_end_input
+            .parse::<f64>()
+            .map_err(|_| "Invalid recipe end".to_string())?;
+        if end <= start {
+            return Err("Recipe end must be greater than start".to_string());
+        }
+        Ok((start, end))
+    }
+
+    fn default_recipe() -> Recipe {
+        Recipe::new("flowalyzer-default").add_step(RecipeStep {
+            repeat_count: 1,
+            speed_factor: 1.0,
+            silent: false,
+        })
+    }
 }
 
 impl Drop for SessionApp {
     fn drop(&mut self) {
         let _ = self.controller.shutdown();
+    }
+}
+
+impl eframe::App for SessionApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_snapshots();
+        egui::TopBottomPanel::top("session_controls").show(ctx, |ui| {
+            self.show_top_panel(ui);
+        });
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.show_status(ui);
+            ui.separator();
+            self.show_visualizations(ui);
+        });
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
 }
 
@@ -110,10 +298,14 @@ fn trim_history(history: &mut VecDeque<f32>) {
     }
 }
 
+fn last_value(history: &VecDeque<f32>) -> f32 {
+    history.back().copied().unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pronunciation::session::{AlignmentReport, SessionConfig, SessionRuntime};
+    use crate::pronunciation::session::SessionRuntime;
     use crate::pronunciation::RecordedClip;
 
     fn dummy_app() -> SessionApp {

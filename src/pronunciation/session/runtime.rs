@@ -1,15 +1,23 @@
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use crate::audio::capture::{CaptureConfig, LiveCapture};
+use crate::audio::playback::duplicate_to_stereo;
 use crate::pronunciation::session::{
     AlignmentReport, ClipVariant, PronunciationScores, SessionConfig, SessionEngine,
     SessionSnapshot,
 };
 use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
 use crate::types::Recipe;
+use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
+
+thread_local! {
+    static PLAYBACK_STREAM: RefCell<Option<OutputStream>> = const { RefCell::new(None) };
+}
 
 pub enum SessionCommand {
     Start,
@@ -29,6 +37,8 @@ pub struct SessionRuntime {
     reference_clip: Arc<RecordedClip>,
     flowalyzed_clip: Arc<Mutex<Option<RecordedClip>>>,
     active_variant: Arc<Mutex<ClipVariant>>,
+    reference_playing: Arc<AtomicBool>,
+    playback_state: Arc<Mutex<Option<PlaybackState>>>,
     engine: Arc<Mutex<SessionEngine>>,
     config: SessionConfig,
     snapshot_sender: Sender<SessionSnapshot>,
@@ -48,6 +58,8 @@ impl SessionRuntime {
             reference_clip: reference_clip.clone(),
             flowalyzed_clip: Arc::new(Mutex::new(None)),
             active_variant: Arc::new(Mutex::new(ClipVariant::Original)),
+            reference_playing: Arc::new(AtomicBool::new(false)),
+            playback_state: Arc::new(Mutex::new(None)),
             engine: Arc::new(Mutex::new(engine)),
             config: config.clone(),
             snapshot_sender: snapshot_tx,
@@ -60,6 +72,10 @@ impl SessionRuntime {
         let controller = SessionController {
             command_sender: command_tx,
         };
+        runtime
+            .snapshot_sender
+            .send(runtime.build_snapshot(PronunciationScores::default()))
+            .ok();
         thread::spawn(move || runtime.run());
         (handle, controller)
     }
@@ -83,11 +99,11 @@ impl SessionRuntime {
                 }
                 Ok(SessionCommand::Shutdown) => break,
                 Ok(SessionCommand::ReplayReference) => {
-                    let _ = self
-                        .snapshot_sender
-                        .send(self.build_snapshot(PronunciationScores::default()));
+                    self.start_reference_playback();
                 }
-                Ok(SessionCommand::StopReplay) => {}
+                Ok(SessionCommand::StopReplay) => {
+                    self.stop_reference_playback();
+                }
                 Ok(SessionCommand::ApplyRecipe {
                     start_sec,
                     end_sec,
@@ -106,6 +122,7 @@ impl SessionRuntime {
                 }
             }
 
+            self.poll_playback_completion();
             thread::sleep(Duration::from_millis(10));
         }
         self.flush_pending();
@@ -143,7 +160,7 @@ impl SessionRuntime {
             alignment: AlignmentReport::default(),
             scores,
             recording: false,
-            reference_playing: false,
+            reference_playing: self.reference_playing.load(Ordering::SeqCst),
             active_clip_variant: self.current_variant(),
             has_flowalyzed_clip: self.has_flowalyzed_clip(),
             recipe_state: None,
@@ -156,11 +173,71 @@ impl SessionRuntime {
             alignment,
             scores: PronunciationScores::default(),
             recording,
-            reference_playing: false,
+            reference_playing: self.reference_playing.load(Ordering::SeqCst),
             active_clip_variant: self.current_variant(),
             has_flowalyzed_clip: self.has_flowalyzed_clip(),
             recipe_state: None,
             error: None,
+        }
+    }
+
+    fn start_reference_playback(&self) {
+        self.stop_reference_playback();
+        let samples: Vec<f32> = self.reference_clip.samples.iter().copied().collect();
+        if samples.is_empty() {
+            return;
+        }
+        let sample_rate = self.reference_clip.sample_rate;
+        if let Ok((stream, stream_handle)) = OutputStream::try_default() {
+            if let Ok(sink) = Sink::try_new(&stream_handle) {
+                let stereo = duplicate_to_stereo(&samples);
+                sink.append(SamplesBuffer::new(2, sample_rate, stereo));
+                let sink_arc = Arc::new(sink);
+                PLAYBACK_STREAM.with(|cell| {
+                    *cell.borrow_mut() = Some(stream);
+                });
+                self.reference_playing.store(true, Ordering::SeqCst);
+                *self.playback_state.lock().unwrap() = Some(PlaybackState { sink: sink_arc });
+                let _ = self
+                    .snapshot_sender
+                    .send(self.build_snapshot(PronunciationScores::default()));
+            }
+        }
+    }
+
+    fn stop_reference_playback(&self) {
+        if let Some(state) = self.playback_state.lock().unwrap().take() {
+            state.sink.stop();
+            self.reference_playing.store(false, Ordering::SeqCst);
+            PLAYBACK_STREAM.with(|cell| {
+                cell.borrow_mut().take();
+            });
+            let _ = self
+                .snapshot_sender
+                .send(self.build_snapshot(PronunciationScores::default()));
+        }
+    }
+
+    fn poll_playback_completion(&self) {
+        if !self.reference_playing.load(Ordering::SeqCst) {
+            return;
+        }
+        let finished = {
+            let guard = self.playback_state.lock().unwrap();
+            guard
+                .as_ref()
+                .map(|state| state.sink.empty())
+                .unwrap_or(false)
+        };
+        if finished {
+            self.reference_playing.store(false, Ordering::SeqCst);
+            self.playback_state.lock().unwrap().take();
+            PLAYBACK_STREAM.with(|cell| {
+                cell.borrow_mut().take();
+            });
+            let _ = self
+                .snapshot_sender
+                .send(self.build_snapshot(PronunciationScores::default()));
         }
     }
 
@@ -184,6 +261,7 @@ impl SessionRuntime {
         if variant == self.current_variant() {
             return;
         }
+        self.stop_reference_playback();
         let clip = match variant {
             ClipVariant::Original => Some((*self.reference_clip).clone()),
             ClipVariant::Flowalyzed => self.flowalyzed_clip.lock().unwrap().clone(),
@@ -213,6 +291,10 @@ impl SessionRuntime {
     fn has_flowalyzed_clip(&self) -> bool {
         self.flowalyzed_clip.lock().unwrap().is_some()
     }
+}
+
+struct PlaybackState {
+    sink: Arc<Sink>,
 }
 
 pub struct SessionHandle {
