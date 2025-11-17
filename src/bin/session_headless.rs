@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use flowalyzer::pronunciation::session::{ChunkMemoryLimit, SessionConfig, SessionEngine};
+use flowalyzer::pronunciation::session::{SessionConfig, SessionEngine};
 use flowalyzer::pronunciation::{load_clip, RecordedClip};
 
 #[derive(Parser, Debug)]
@@ -21,9 +21,6 @@ struct Args {
     #[arg(long, default_value_t = 100)]
     chunk_ms: u32,
 
-    /// Enable look-ahead mode (buffer one chunk before analysis)
-    #[arg(long, default_value_t = false)]
-    lookahead: bool,
 }
 
 fn main() -> Result<()> {
@@ -36,11 +33,6 @@ fn main() -> Result<()> {
 
     let config = SessionConfig {
         chunk_duration_ms: args.chunk_ms.max(10),
-        chunk_memory_limit: if args.lookahead {
-            ChunkMemoryLimit::PreviousAndNext
-        } else {
-            ChunkMemoryLimit::PreviousOnly
-        },
         ..SessionConfig::default()
     };
     let mut engine = SessionEngine::new(&reference.samples, &config);
@@ -69,19 +61,7 @@ fn run_headless(engine: &mut SessionEngine, learner: &RecordedClip) {
         if chunk.is_empty() {
             continue;
         }
-        if let Some(report) = engine.ingest_chunk(chunk.to_vec()) {
-            println!(
-                "chunk {:03} offset={:7.2}ms confidence={:.3} frames={}",
-                chunk_index,
-                report.global_time_offset_ms,
-                report.confidence,
-                report.reference_energy.len()
-            );
-            chunk_index += 1;
-        }
-    }
-
-    if let Some(report) = engine.flush_pending() {
+        let report = engine.process_chunk(chunk);
         println!(
             "chunk {:03} offset={:7.2}ms confidence={:.3} frames={}",
             chunk_index,

@@ -866,7 +866,7 @@ use std::time::Duration;
 use flowalyzer::pronunciation::{RecordedClip, SessionConfig, SessionRuntime};
 
 #[test]
-fn runtime_spawns_and_shuts_down() {
+fn runtime_emits_initial_snapshot_on_spawn() {
     let clip = RecordedClip::from_samples(vec![0.0; 16000], 16000);
     let config = SessionConfig::default();
     let (handle, controller) = SessionRuntime::spawn(clip, config);
@@ -875,12 +875,12 @@ fn runtime_spawns_and_shuts_down() {
     std::thread::sleep(Duration::from_millis(50));
 
     let snapshots = handle.drain_snapshots();
-    // Should have no snapshots since we never started
-    assert!(snapshots.is_empty());
+    // Initial snapshot arrives even before capture starts
+    assert!(!snapshots.is_empty());
 }
 
 #[test]
-fn start_stop_cycle_resets_engine() {
+fn start_stop_cycle_runs_cleanly() {
     let clip = RecordedClip::from_samples(vec![0.0; 16000], 16000);
     let config = SessionConfig::default();
     let (_handle, controller) = SessionRuntime::spawn(clip, config);
@@ -890,7 +890,6 @@ fn start_stop_cycle_resets_engine() {
     controller.stop().unwrap();
     std::thread::sleep(Duration::from_millis(20));
 
-    // Second start should reset the engine
     controller.start().unwrap();
     std::thread::sleep(Duration::from_millis(20));
     controller.stop().unwrap();
@@ -903,6 +902,30 @@ fn start_stop_cycle_resets_engine() {
 3. Verify NO dead code
 4. Update status: "Phase 3 complete - session engine and runtime"
 5. Commit: `git add -A && git commit -m "Phase 3 (session engine and runtime) complete"`
+
+### Phase 3 Course Correction
+
+Plan to align the implementation with the spec before proceeding:
+
+**Subphase A: Align SessionEngine with spec**
+- Precompute and store reference feature frames (energy, pitch) instead of raw samples.
+- Remove configurable chunk-memory limits; enforce only the minimal boundary buffer (1–2 chunks) strictly for overlap/fade at boundaries.
+- Drop learner-history timelines; keep only the global sample counter plus the optional pending boundary chunk.
+- Keep processing small/pure: process a chunk, compute features, align, advance the counter, return the report.
+
+**Subphase B: Simplify SessionConfig and enforce invariants**
+- Reduce config to Phase 3 fields (sample_rate, chunk_duration_ms, latency_budget_ms, latency_range); if boundary buffering is needed, keep it fixed (1–2 chunks) per invariant, not user-configurable.
+- Enforce correct-by-construction: runtime spawn requires a valid RecordedClip reference; fail fast otherwise.
+
+**Subphase C: Trim SessionRuntime to Phase 3 scope**
+- Strip or isolate Phase 4/5 features (recipe application, clip variant toggling, audio playback) from the Phase 3 runtime path.
+- Ensure start/stop only gates capture; runtime exists immediately after spawn and emits an initial snapshot.
+- Keep snapshot construction stateless and per-chunk; no accumulation of histories.
+
+**Subphase D: Align tests and verification**
+- Update `tests/stateless_runtime.rs` to match lifecycle intent (spawn yields initial snapshot; start/stop gates capture).
+- Adjust Phase 3 doc snippets to reflect corrected behavior.
+- Run `cargo test --all` and `cargo clippy --all`; require 100% pass and zero warnings.
 
 ---
 

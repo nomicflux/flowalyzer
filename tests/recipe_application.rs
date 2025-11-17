@@ -45,9 +45,17 @@ fn toggle_clip_variant_switches_active_state() {
     controller
         .toggle_clip_variant(ClipVariant::Flowalyzed)
         .expect("toggle to flowalyzed");
-    std::thread::sleep(Duration::from_millis(50));
-
-    let snapshots = handle.drain_snapshots();
+    let mut snapshots = Vec::new();
+    for _ in 0..20 {
+        snapshots.extend(handle.drain_snapshots());
+        if snapshots
+            .iter()
+            .any(|snap| snap.active_clip_variant == ClipVariant::Flowalyzed)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     assert!(
         snapshots
             .iter()

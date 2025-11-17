@@ -50,6 +50,10 @@ impl SessionRuntime {
         reference_clip: RecordedClip,
         config: SessionConfig,
     ) -> (SessionHandle, SessionController) {
+        assert!(
+            !reference_clip.samples.is_empty(),
+            "reference clip cannot be empty"
+        );
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let reference_clip = Arc::new(reference_clip);
@@ -95,7 +99,6 @@ impl SessionRuntime {
                 Ok(SessionCommand::Stop) => {
                     recording = false;
                     capture = None;
-                    self.flush_pending();
                 }
                 Ok(SessionCommand::Shutdown) => break,
                 Ok(SessionCommand::ReplayReference) => {
@@ -125,7 +128,6 @@ impl SessionRuntime {
             self.poll_playback_completion();
             thread::sleep(Duration::from_millis(10));
         }
-        self.flush_pending();
     }
 
     fn start_capture(&self) -> Result<LiveCapture> {
@@ -139,18 +141,9 @@ impl SessionRuntime {
         let timeout = Duration::from_millis(self.config.chunk_duration_ms as u64);
         if let Some(samples) = capture.recv_chunk(timeout) {
             if let Ok(mut engine) = self.engine.lock() {
-                if let Some(report) = engine.ingest_chunk(samples) {
-                    let snapshot = self.snapshot_for(report, true);
-                    let _ = self.snapshot_sender.send(snapshot);
-                }
-            }
-        }
-    }
-
-    fn flush_pending(&self) {
-        if let Ok(mut engine) = self.engine.lock() {
-            if let Some(report) = engine.flush_pending() {
-                let _ = self.snapshot_sender.send(self.snapshot_for(report, true));
+                let report = engine.process_chunk(&samples);
+                let snapshot = self.snapshot_for(report, true);
+                let _ = self.snapshot_sender.send(snapshot);
             }
         }
     }
@@ -268,10 +261,16 @@ impl SessionRuntime {
         };
         match clip {
             Some(clip) => {
-                if let Ok(mut engine) = self.engine.lock() {
-                    *engine = SessionEngine::new(&clip.samples, &self.config);
+                let engine = self.engine.clone();
+                let config = self.config.clone();
+                std::thread::spawn(move || {
+                    if let Ok(mut engine) = engine.lock() {
+                        *engine = SessionEngine::new(&clip.samples, &config);
+                    }
+                });
+                if let Ok(mut active) = self.active_variant.lock() {
+                    *active = variant;
                 }
-                *self.active_variant.lock().unwrap() = variant;
                 let _ = self
                     .snapshot_sender
                     .send(self.build_snapshot(PronunciationScores::default()));

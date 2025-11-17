@@ -1,16 +1,20 @@
+use std::collections::VecDeque;
+
 use crate::pronunciation::alignment::align_features;
 use crate::pronunciation::features::{
     compute_energy_frames, compute_pitch_frames, FeatureFrames,
 };
 use crate::pronunciation::session::AlignmentReport;
 
-use super::{ChunkMemory, ChunkMemoryLimit, SessionConfig};
+use super::SessionConfig;
+
+const FRAME_HOP_SAMPLES: usize = 160; // 10ms at 16kHz
+const BOUNDARY_BUFFER_CAPACITY: usize = 2; // max two chunks for boundary overlap
 
 pub struct SessionEngine {
-    reference_samples: Vec<f32>,
-    chunk_memory: ChunkMemory,
-    pending_chunk: Option<Vec<f32>>,
-    delay_processing: bool,
+    reference_energy: Vec<f32>,
+    reference_pitch: Vec<f32>,
+    boundary_chunks: VecDeque<Vec<f32>>,
     global_sample_counter: u64,
     chunk_samples: usize,
     sample_rate: u32,
@@ -19,57 +23,27 @@ pub struct SessionEngine {
 impl SessionEngine {
     pub fn new(reference_samples: &[f32], config: &SessionConfig) -> Self {
         let chunk_samples = (config.sample_rate * config.chunk_duration_ms / 1_000).max(1) as usize;
-        let delay_processing =
-            matches!(config.chunk_memory_limit, ChunkMemoryLimit::PreviousAndNext);
+        let reference_energy = compute_energy_frames(reference_samples);
+        let reference_pitch = compute_pitch_frames(reference_samples);
         Self {
-            reference_samples: reference_samples.to_vec(),
-            chunk_memory: ChunkMemory::new(config.chunk_memory_limit.max_chunks()),
-            pending_chunk: None,
-            delay_processing,
+            reference_energy,
+            reference_pitch,
+            boundary_chunks: VecDeque::with_capacity(BOUNDARY_BUFFER_CAPACITY),
             global_sample_counter: 0,
             chunk_samples,
             sample_rate: config.sample_rate,
         }
     }
 
-    pub fn ingest_chunk(&mut self, learner_samples: Vec<f32>) -> Option<AlignmentReport> {
-        if self.delay_processing {
-            if let Some(pending) = self.pending_chunk.take() {
-                let report = self.process_now(&pending);
-                self.pending_chunk = Some(learner_samples);
-                Some(report)
-            } else {
-                self.pending_chunk = Some(learner_samples);
-                None
-            }
-        } else {
-            Some(self.process_now(&learner_samples))
-        }
-    }
-
-    pub fn flush_pending(&mut self) -> Option<AlignmentReport> {
-        self.pending_chunk
-            .take()
-            .map(|pending| self.process_now(&pending))
-    }
-
-    fn process_now(&mut self, learner_samples: &[f32]) -> AlignmentReport {
-        let reference_slice = self.reference_slice(learner_samples.len());
-        let reference_energy = compute_energy_frames(reference_slice);
-        let reference_pitch = compute_pitch_frames(reference_slice);
-        let learner_energy = compute_energy_frames(learner_samples);
-        let learner_pitch = compute_pitch_frames(learner_samples);
-        let reference_frames = FeatureFrames {
-            energy: reference_energy,
-            pitch: reference_pitch,
-        };
+    pub fn process_chunk(&mut self, learner_samples: &[f32]) -> AlignmentReport {
         let learner_frames = FeatureFrames {
-            energy: learner_energy,
-            pitch: learner_pitch,
+            energy: compute_energy_frames(learner_samples),
+            pitch: compute_pitch_frames(learner_samples),
         };
+        let reference_frames = self.reference_window(learner_frames.energy.len());
         let report = align_features(&reference_frames, &learner_frames, self.global_offset_ms());
+        self.remember_boundary_chunk(learner_samples);
         self.advance_counter(learner_samples.len());
-        self.chunk_memory.remember(learner_samples);
         report
     }
 
@@ -83,18 +57,27 @@ impl SessionEngine {
 
     pub fn reset(&mut self) {
         self.global_sample_counter = 0;
-        self.pending_chunk = None;
-        self.chunk_memory.clear();
+        self.boundary_chunks.clear();
     }
 
-    pub fn previous_chunk(&self) -> Option<&[f32]> {
-        self.chunk_memory.previous()
+    fn reference_window(&self, learner_frames: usize) -> FeatureFrames {
+        let start_frame = (self.global_sample_counter as usize) / FRAME_HOP_SAMPLES;
+        let start = start_frame.min(self.reference_energy.len());
+        let end = (start + learner_frames).min(self.reference_energy.len());
+        FeatureFrames {
+            energy: self.reference_energy[start..end].to_vec(),
+            pitch: self.reference_pitch[start..end].to_vec(),
+        }
     }
 
-    fn reference_slice(&self, samples_requested: usize) -> &[f32] {
-        let start = self.global_sample_counter as usize;
-        let end = (start + samples_requested).min(self.reference_samples.len());
-        &self.reference_samples[start..end]
+    fn remember_boundary_chunk(&mut self, samples: &[f32]) {
+        if BOUNDARY_BUFFER_CAPACITY == 0 {
+            return;
+        }
+        if self.boundary_chunks.len() == BOUNDARY_BUFFER_CAPACITY {
+            self.boundary_chunks.pop_front();
+        }
+        self.boundary_chunks.push_back(samples.to_vec());
     }
 
     fn global_offset_ms(&self) -> f32 {
