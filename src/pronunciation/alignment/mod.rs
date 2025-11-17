@@ -1,29 +1,46 @@
 use std::time::Duration;
 
+use crate::pronunciation::features::FeatureFrames;
 use crate::pronunciation::session::AlignmentReport;
 
 const FRAME_HOP_MS: u64 = 10;
 
-pub fn align_chunk(
-    reference_energy: &[f32],
-    learner_energy: &[f32],
-    reference_pitch: &[f32],
-    learner_pitch: &[f32],
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StatelessAligner;
+
+impl StatelessAligner {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn align(
+        &self,
+        reference: &FeatureFrames,
+        learner: &FeatureFrames,
+        global_offset_ms: f32,
+    ) -> AlignmentReport {
+        align_features(reference, learner, global_offset_ms)
+    }
+}
+
+pub fn align_features(
+    reference: &FeatureFrames,
+    learner: &FeatureFrames,
     global_offset_ms: f32,
 ) -> AlignmentReport {
-    let similarity = compute_similarity(reference_energy, learner_energy);
-    let contour = compute_contour_similarity(reference_pitch, learner_pitch);
+    let similarity = compute_similarity(&reference.energy, &learner.energy);
+    let contour = compute_contour_similarity(&reference.pitch, &learner.pitch);
     let confidence = compute_confidence(&similarity, &contour);
 
     AlignmentReport {
-        reference_energy: reference_energy.to_vec(),
-        learner_energy: learner_energy.to_vec(),
-        reference_pitch: reference_pitch.to_vec(),
-        learner_pitch: learner_pitch.to_vec(),
+        reference_energy: reference.energy.clone(),
+        learner_energy: learner.energy.clone(),
+        reference_pitch: reference.pitch.clone(),
+        learner_pitch: learner.pitch.clone(),
         similarity_band: similarity,
         contour_band: contour,
         phonemes: Vec::new(),
-        total_duration: Duration::from_millis((learner_energy.len() as u64) * FRAME_HOP_MS),
+        total_duration: Duration::from_millis((learner.energy.len() as u64) * FRAME_HOP_MS),
         global_time_offset_ms: global_offset_ms,
         confidence,
     }

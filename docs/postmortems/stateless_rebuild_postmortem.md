@@ -34,5 +34,6 @@ This document records what went wrong so we do not repeat the mistake.
 * “Impossible by construction” is an architectural constraint, not a test harness. Enforce it via types and module boundaries, not just assertions.
 * When asked to “rebuild from scratch”, do not carry forward any implementation artifacts unless explicitly approved.
 * Documentation is a prerequisite for drastic rewrites; without a spec, code tends to drift back toward the old design.
+* Any deliverable that ships without its core functionality is not complete; treating it as done hides unfinished work.
 
 With the spec and post-mortem in place, we now have a clear path to rebuild the runtime properly. Any future deviation from the spec needs to be justified in writing before touching code. 

@@ -1,6 +1,8 @@
 use std::f32::consts::PI;
 
-use flowalyzer::pronunciation::features::{compute_energy_frames, compute_pitch_frames};
+use flowalyzer::pronunciation::features::{
+    compute_energy_frames, compute_pitch_frames, FeatureExtractor,
+};
 
 #[test]
 fn energy_frames_from_silence_are_zero() {
@@ -40,4 +42,15 @@ fn pitch_frames_detect_tone() {
     );
     let avg_pitch = voiced.iter().sum::<f32>() / voiced.len() as f32;
     assert!(avg_pitch > 150.0 && avg_pitch < 300.0);
+}
+
+#[test]
+fn feature_extractor_returns_energy_and_pitch() {
+    let samples: Vec<f32> = (0..320)
+        .map(|i| (2.0 * PI * 110.0 * i as f32 / 16_000.0).sin())
+        .collect();
+    let extractor = FeatureExtractor::new();
+    let frames = extractor.extract(&samples);
+    assert!(!frames.energy.is_empty());
+    assert!(!frames.pitch.is_empty());
 }

@@ -328,29 +328,46 @@ pub fn compute_pitch_frames(samples: &[f32]) -> Vec<f32> {
 #### 2C. Stateless aligner (pure function)
 ```rust
 // src/pronunciation/alignment/mod.rs
+use crate::pronunciation::features::FeatureFrames;
 use crate::pronunciation::session::AlignmentReport;
 use std::time::Duration;
 
-pub fn align_chunk(
-    reference_energy: &[f32],
-    learner_energy: &[f32],
-    reference_pitch: &[f32],
-    learner_pitch: &[f32],
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StatelessAligner;
+
+impl StatelessAligner {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn align(
+        &self,
+        reference: &FeatureFrames,
+        learner: &FeatureFrames,
+        global_offset_ms: f32,
+    ) -> AlignmentReport {
+        align_features(reference, learner, global_offset_ms)
+    }
+}
+
+pub fn align_features(
+    reference: &FeatureFrames,
+    learner: &FeatureFrames,
     global_offset_ms: f32,
 ) -> AlignmentReport {
-    let similarity = compute_similarity(reference_energy, learner_energy);
-    let contour = compute_contour_similarity(reference_pitch, learner_pitch);
+    let similarity = compute_similarity(&reference.energy, &learner.energy);
+    let contour = compute_contour_similarity(&reference.pitch, &learner.pitch);
     let confidence = compute_confidence(&similarity, &contour);
 
     AlignmentReport {
-        reference_energy: reference_energy.to_vec(),
-        learner_energy: learner_energy.to_vec(),
-        reference_pitch: reference_pitch.to_vec(),
-        learner_pitch: learner_pitch.to_vec(),
+        reference_energy: reference.energy.clone(),
+        learner_energy: learner.energy.clone(),
+        reference_pitch: reference.pitch.clone(),
+        learner_pitch: learner.pitch.clone(),
         similarity_band: similarity,
         contour_band: contour,
         phonemes: Vec::new(),  // Phase 3 will add phoneme detection
-        total_duration: Duration::from_millis(learner_energy.len() as u64 * 10),
+        total_duration: Duration::from_millis(learner.energy.len() as u64 * 10),
         global_time_offset_ms: global_offset_ms,
         confidence,
     }
@@ -409,6 +426,28 @@ mod pitch;
 
 pub use energy::compute_energy_frames;
 pub use pitch::compute_pitch_frames;
+
+#[derive(Debug, Clone, Default)]
+pub struct FeatureFrames {
+    pub energy: Vec<f32>,
+    pub pitch: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FeatureExtractor;
+
+impl FeatureExtractor {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn extract(&self, samples: &[f32]) -> FeatureFrames {
+        FeatureFrames {
+            energy: compute_energy_frames(samples),
+            pitch: compute_pitch_frames(samples),
+        }
+    }
+}
 ```
 
 #### 2E. Unit tests for feature extraction
@@ -1089,7 +1128,7 @@ After all phases complete:
 
 ## Key Invariants
 
-1. **Engine holds NO learner history** - Only reference features + sample counter
+1. **Engine holds NO learner history** - Only reference features + sample counter; a single pending/previous chunk is allowed strictly to complete boundary processing (fade/overlap) and must never accumulate into timelines. At most two chunks may be held when the end boundary needs the same treatment.
 2. **Snapshots are one-frame views** - Current chunk data only
 3. **UI owns ALL visualization history** - VecDeque buffers in SessionApp
 4. **Histories clear on restart** - Session restart = fresh start

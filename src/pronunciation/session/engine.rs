@@ -1,5 +1,7 @@
-use crate::pronunciation::alignment::align_chunk;
-use crate::pronunciation::features::{compute_energy_frames, compute_pitch_frames};
+use crate::pronunciation::alignment::align_features;
+use crate::pronunciation::features::{
+    compute_energy_frames, compute_pitch_frames, FeatureFrames,
+};
 use crate::pronunciation::session::AlignmentReport;
 
 use super::{ChunkMemory, ChunkMemoryLimit, SessionConfig};
@@ -54,16 +56,18 @@ impl SessionEngine {
     fn process_now(&mut self, learner_samples: &[f32]) -> AlignmentReport {
         let reference_slice = self.reference_slice(learner_samples.len());
         let reference_energy = compute_energy_frames(reference_slice);
-        let learner_energy = compute_energy_frames(learner_samples);
         let reference_pitch = compute_pitch_frames(reference_slice);
+        let learner_energy = compute_energy_frames(learner_samples);
         let learner_pitch = compute_pitch_frames(learner_samples);
-        let report = align_chunk(
-            &reference_energy,
-            &learner_energy,
-            &reference_pitch,
-            &learner_pitch,
-            self.global_offset_ms(),
-        );
+        let reference_frames = FeatureFrames {
+            energy: reference_energy,
+            pitch: reference_pitch,
+        };
+        let learner_frames = FeatureFrames {
+            energy: learner_energy,
+            pitch: learner_pitch,
+        };
+        let report = align_features(&reference_frames, &learner_frames, self.global_offset_ms());
         self.advance_counter(learner_samples.len());
         self.chunk_memory.remember(learner_samples);
         report

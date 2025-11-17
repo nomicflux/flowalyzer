@@ -4,7 +4,7 @@ const SAMPLE_RATE: u32 = 16_000;
 const FMIN_HZ: f64 = 80.0;
 const FMAX_HZ: f64 = 800.0;
 const FRAME_LENGTH_SAMPLES: usize = 1024;
-const HOP_LENGTH_SAMPLES: usize = 160;
+const HOP_LENGTH_SAMPLES: usize = 160; // 10ms at 16kHz
 
 pub fn compute_pitch_frames(samples: &[f32]) -> Vec<f32> {
     if samples.is_empty() {
