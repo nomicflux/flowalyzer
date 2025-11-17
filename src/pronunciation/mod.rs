@@ -14,8 +14,8 @@ pub mod alignment;
 pub mod features;
 pub mod session;
 pub use session::{
-    AlignedPhoneme, AlignmentReport, ClipVariant, PronunciationScores,
-    RecipeApplicationProgress, RecipeApplicationStage, SessionSnapshot,
+    AlignedPhoneme, AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
+    RecipeApplicationStage, SessionSnapshot,
 };
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;

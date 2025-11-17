@@ -12,7 +12,9 @@ fn engine_advances_global_offset() {
     let reference = reference_signal((config.sample_rate * 2) as usize, config.sample_rate);
     let mut engine = SessionEngine::new(&reference, &config);
     let chunk = vec![0.0; engine.chunk_samples()];
-    let report_one = engine.ingest_chunk(chunk.clone()).expect("immediate report");
+    let report_one = engine
+        .ingest_chunk(chunk.clone())
+        .expect("immediate report");
     assert_eq!(report_one.global_time_offset_ms, 0.0);
     let report_two = engine.ingest_chunk(chunk.clone()).expect("second report");
     assert!(report_two.global_time_offset_ms > report_one.global_time_offset_ms);
@@ -40,7 +42,9 @@ fn lookahead_mode_delays_first_chunk() {
     let mut engine = SessionEngine::new(&reference, &config);
     let chunk = vec![0.0; engine.chunk_samples()];
     assert!(engine.ingest_chunk(chunk.clone()).is_none());
-    let second = engine.ingest_chunk(chunk.clone()).expect("second chunk produces report");
+    let second = engine
+        .ingest_chunk(chunk.clone())
+        .expect("second chunk produces report");
     assert!(second.global_time_offset_ms >= 0.0);
     let flushed = engine.flush_pending().expect("flush last chunk");
     assert!(flushed.global_time_offset_ms >= second.global_time_offset_ms);

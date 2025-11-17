@@ -16,9 +16,9 @@ pub struct SessionEngine {
 
 impl SessionEngine {
     pub fn new(reference_samples: &[f32], config: &SessionConfig) -> Self {
-        let chunk_samples =
-            (config.sample_rate * config.chunk_duration_ms / 1_000).max(1) as usize;
-        let delay_processing = matches!(config.chunk_memory_limit, ChunkMemoryLimit::PreviousAndNext);
+        let chunk_samples = (config.sample_rate * config.chunk_duration_ms / 1_000).max(1) as usize;
+        let delay_processing =
+            matches!(config.chunk_memory_limit, ChunkMemoryLimit::PreviousAndNext);
         Self {
             reference_samples: reference_samples.to_vec(),
             chunk_memory: ChunkMemory::new(config.chunk_memory_limit.max_chunks()),

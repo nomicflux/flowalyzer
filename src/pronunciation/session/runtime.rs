@@ -4,10 +4,11 @@ use std::thread;
 use std::time::Duration;
 
 use crate::audio::capture::{CaptureConfig, LiveCapture};
-use crate::pronunciation::{PronunciationError, RecordedClip, Result};
 use crate::pronunciation::session::{
-    AlignmentReport, ClipVariant, PronunciationScores, SessionConfig, SessionEngine, SessionSnapshot,
+    AlignmentReport, ClipVariant, PronunciationScores, SessionConfig, SessionEngine,
+    SessionSnapshot,
 };
+use crate::pronunciation::{PronunciationError, RecordedClip, Result};
 
 pub enum SessionCommand {
     Start,
@@ -25,7 +26,10 @@ pub struct SessionRuntime {
 }
 
 impl SessionRuntime {
-    pub fn spawn(reference_clip: RecordedClip, config: SessionConfig) -> (SessionHandle, SessionController) {
+    pub fn spawn(
+        reference_clip: RecordedClip,
+        config: SessionConfig,
+    ) -> (SessionHandle, SessionController) {
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let engine = SessionEngine::new(&reference_clip.samples, &config);
@@ -65,7 +69,9 @@ impl SessionRuntime {
                 }
                 Ok(SessionCommand::Shutdown) => break,
                 Ok(SessionCommand::ReplayReference) => {
-                    let _ = self.snapshot_sender.send(self.build_snapshot(PronunciationScores::default()));
+                    let _ = self
+                        .snapshot_sender
+                        .send(self.build_snapshot(PronunciationScores::default()));
                 }
                 Ok(SessionCommand::StopReplay) => {}
                 Err(TryRecvError::Empty) => {}

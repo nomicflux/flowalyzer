@@ -1,4 +1,4 @@
-use pyin::{Framing, PadMode, PYINExecutor};
+use pyin::{Framing, PYINExecutor, PadMode};
 
 const SAMPLE_RATE: u32 = 16_000;
 const FMIN_HZ: f64 = 80.0;

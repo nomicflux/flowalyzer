@@ -131,6 +131,10 @@ impl RecipeApplicationStage {
     }
 
     pub fn ordered() -> [Self; 3] {
-        [Self::ExtractingAudio, Self::ApplyingRecipe, Self::SavingResult]
+        [
+            Self::ExtractingAudio,
+            Self::ApplyingRecipe,
+            Self::SavingResult,
+        ]
     }
 }
