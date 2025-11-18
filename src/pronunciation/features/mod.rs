@@ -2,7 +2,7 @@ mod energy;
 mod pitch;
 
 pub use energy::compute_energy_frames;
-pub use pitch::compute_pitch_frames;
+pub use pitch::{compute_pitch_frames, compute_pitch_frames_with_rate};
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureFrames {

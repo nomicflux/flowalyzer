@@ -61,20 +61,21 @@ fn frame_similarity(reference_value: f32, learner_value: f32) -> f32 {
 
 fn compute_contour_similarity(reference: &[f32], learner: &[f32]) -> Vec<f32> {
     let len = reference.len().min(learner.len());
+    if len == 0 {
+        return Vec::new();
+    }
     (0..len)
-        .map(|index| pitch_similarity(reference[index], learner[index]))
+        .map(|i| pitch_frame_similarity(reference[i], learner[i]))
         .collect()
 }
 
-fn pitch_similarity(reference_value: f32, learner_value: f32) -> f32 {
-    if reference_value == 0.0 && learner_value == 0.0 {
-        return 1.0;
-    }
-    if reference_value == 0.0 || learner_value == 0.0 {
-        return 0.0;
-    }
-    let ratio = (reference_value / learner_value).abs();
-    (ratio.min(1.0 / ratio)).clamp(0.0, 1.0)
+fn pitch_frame_similarity(reference_pitch: f32, learner_pitch: f32) -> f32 {
+    // Use a minimum positive value so the ratio is well-defined; if both are zero this yields a ratio of 1.
+    let ref_p = reference_pitch.abs().max(f32::MIN_POSITIVE);
+    let learner_p = learner_pitch.abs().max(f32::MIN_POSITIVE);
+    let semitone_diff = (ref_p / learner_p).log2().abs() * 12.0;
+    // 12 semitones (one octave) difference yields 0. Linearly map within that band.
+    (1.0 - semitone_diff / 12.0).clamp(0.0, 1.0)
 }
 
 fn compute_confidence(similarity: &[f32], contour: &[f32]) -> f32 {

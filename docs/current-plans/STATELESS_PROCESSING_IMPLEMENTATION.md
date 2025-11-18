@@ -1122,6 +1122,30 @@ fn apply_recipe_creates_flowalyzed_clip() {
 }
 ```
 
+### Phase 5 Course Correction & Execution Plan
+
+Key goals and constraints:
+- Runtime caches a flowalyzed clip and tracks the active variant (original/flowalyzed).
+- Controller supports recipe application over a reference range and variant toggling.
+- Snapshots/handle reflect `has_flowalyzed_clip`, active variant, errors, and recording state for the UI.
+- UI exposes recipe apply and variant toggle controls; histories remain UI-owned; stats/visuals display current chunk and comparisons.
+- Integration tests cover recipe application and variant toggling.
+
+Subphase A: Runtime & snapshots
+- Verify ApplyRecipe sets `flowalyzed_clip`, marks `has_flowalyzed_clip = true`, and emits a snapshot.
+- Verify ToggleClipVariant rebuilds the engine on the chosen clip, updates `active_clip_variant`, and emits a snapshot.
+- Add/adjust tests for snapshot contents after apply/toggle.
+
+Subphase B: UI surfacing
+- Ensure UI controls call `apply_recipe`/`toggle_clip_variant` and surface errors.
+- Add visuals/placeholders for history-driven stats (waveform/pitch/similarity contours) instead of text-only summaries.
+- Keep histories bounded and clear on restart/variant toggle.
+
+Subphase C: Integration validation
+- Run `cargo test --all` and `cargo clippy --all`.
+- Manual flow: `cargo run --bin pronunciation -- --reference <wav>`; verify restart/stop/replay, recipe apply creates flowalyzed clip, variant toggles and state resets, stats/visuals update per chunk.
+- Optional headless sanity: `cargo run --bin session_headless -- --reference <wav> --chunk-ms 100`.
+
 ### Phase End Verification
 1. Run `cargo test` - expect 100% pass rate
 2. Run `cargo clippy --all-targets --all-features` - fix ALL errors

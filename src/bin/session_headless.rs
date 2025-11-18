@@ -40,7 +40,7 @@ fn main() -> Result<()> {
         "Reference duration: {:.2}s | Learner duration: {:.2}s | chunk={} samples",
         reference.duration.as_secs_f32(),
         learner.duration.as_secs_f32(),
-        engine.chunk_samples()
+        config.sample_rate * config.chunk_duration_ms / 1_000
     );
 
     run_headless(&mut engine, &learner);
@@ -52,7 +52,8 @@ fn load_clip_checked(path: &PathBuf) -> Result<RecordedClip> {
 }
 
 fn run_headless(engine: &mut SessionEngine, learner: &RecordedClip) {
-    let chunk_size = engine.chunk_samples();
+    let chunk_size =
+        (learner.sample_rate * SessionConfig::default().chunk_duration_ms) as usize / 1_000;
     let mut chunk_index = 0usize;
     let samples: Vec<f32> = learner.samples.iter().copied().collect();
 

@@ -7,9 +7,10 @@ use std::time::Duration;
 
 use crate::audio::capture::{CaptureConfig, LiveCapture};
 use crate::audio::playback::duplicate_to_stereo;
+use crate::audio::resample::linear_resample;
 use crate::pronunciation::session::{
-    AlignmentReport, ClipVariant, PronunciationScores, SessionConfig, SessionEngine,
-    SessionSnapshot,
+    AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
+    RecipeApplicationStage, SessionConfig, SessionEngine, SessionSnapshot,
 };
 use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
 use crate::types::Recipe;
@@ -43,6 +44,7 @@ pub struct SessionRuntime {
     config: SessionConfig,
     snapshot_sender: Sender<SessionSnapshot>,
     command_receiver: Receiver<SessionCommand>,
+    capture_buffer: Arc<Mutex<Vec<f32>>>,
 }
 
 impl SessionRuntime {
@@ -68,6 +70,7 @@ impl SessionRuntime {
             config: config.clone(),
             snapshot_sender: snapshot_tx,
             command_receiver: command_rx,
+            capture_buffer: Arc::new(Mutex::new(Vec::new())),
         };
         let handle = SessionHandle {
             snapshot_receiver: snapshot_rx,
@@ -76,10 +79,7 @@ impl SessionRuntime {
         let controller = SessionController {
             command_sender: command_tx,
         };
-        runtime
-            .snapshot_sender
-            .send(runtime.build_snapshot(PronunciationScores::default()))
-            .ok();
+        runtime.snapshot_sender.send(runtime.build_snapshot()).ok();
         thread::spawn(move || runtime.run());
         (handle, controller)
     }
@@ -99,9 +99,7 @@ impl SessionRuntime {
                 Ok(SessionCommand::Stop) => {
                     recording = false;
                     capture = None;
-                    let _ = self
-                        .snapshot_sender
-                        .send(self.build_snapshot(PronunciationScores::default()));
+                    let _ = self.snapshot_sender.send(self.build_snapshot());
                 }
                 Ok(SessionCommand::Shutdown) => break,
                 Ok(SessionCommand::ReplayReference) => {
@@ -134,7 +132,7 @@ impl SessionRuntime {
     }
 
     fn start_capture(&self) -> Result<LiveCapture> {
-        let mut capture_config = CaptureConfig::new(Duration::from_secs(3600));
+        let mut capture_config = CaptureConfig::new();
         capture_config.sample_rate = self.config.sample_rate;
         capture_config.latency_ms = self.config.latency_range.clone();
         LiveCapture::start(&capture_config).map_err(|err| PronunciationError::new(err.to_string()))
@@ -142,38 +140,75 @@ impl SessionRuntime {
 
     fn process_capture_chunk(&self, capture: &LiveCapture) {
         let timeout = Duration::from_millis(self.config.chunk_duration_ms as u64);
-        if let Some(samples) = capture.recv_chunk(timeout) {
-            if let Ok(mut engine) = self.engine.lock() {
-                let report = engine.process_chunk(&samples);
-                let snapshot = self.snapshot_for(report, true);
-                let _ = self.snapshot_sender.send(snapshot);
+        let target_len =
+            (self.config.sample_rate as usize * self.config.chunk_duration_ms as usize) / 1_000;
+        let incoming_rate = capture.sample_rate();
+        let mut buffer = self.capture_buffer.lock().unwrap();
+        while let Some(chunk) = capture.recv_chunk(timeout) {
+            buffer.extend_from_slice(&chunk);
+            match collect_resampled_chunk_from_buffer(
+                &buffer,
+                target_len,
+                incoming_rate,
+                self.config.sample_rate,
+            ) {
+                Ok(Some((processed, remaining))) => {
+                    *buffer = remaining;
+                    if let Ok(mut engine) = self.engine.lock() {
+                        let report = engine.process_chunk(&processed);
+                        let snapshot = self.snapshot_for(report, true);
+                        let _ = self.snapshot_sender.send(snapshot);
+                    }
+                }
+                Ok(None) => break,
+                Err(err) => {
+                    buffer.clear();
+                    let mut snapshot = self.build_snapshot();
+                    snapshot.error = Some(err.to_string());
+                    let _ = self.snapshot_sender.send(snapshot);
+                    break;
+                }
             }
         }
     }
 
-    fn build_snapshot(&self, scores: PronunciationScores) -> SessionSnapshot {
-        SessionSnapshot {
-            alignment: AlignmentReport::default(),
-            scores,
-            recording: false,
-            reference_playing: self.reference_playing.load(Ordering::SeqCst),
-            active_clip_variant: self.current_variant(),
-            has_flowalyzed_clip: self.has_flowalyzed_clip(),
-            recipe_state: None,
-            error: None,
-        }
+    fn build_snapshot(&self) -> SessionSnapshot {
+        self.snapshot_internal(
+            AlignmentReport::default(),
+            PronunciationScores::default(),
+            false,
+            None,
+            None,
+        )
     }
 
     fn snapshot_for(&self, alignment: AlignmentReport, recording: bool) -> SessionSnapshot {
+        self.snapshot_internal(
+            alignment,
+            PronunciationScores::default(),
+            recording,
+            None,
+            None,
+        )
+    }
+
+    fn snapshot_internal(
+        &self,
+        alignment: AlignmentReport,
+        scores: PronunciationScores,
+        recording: bool,
+        recipe_state: Option<RecipeApplicationProgress>,
+        error: Option<String>,
+    ) -> SessionSnapshot {
         SessionSnapshot {
             alignment,
-            scores: PronunciationScores::default(),
+            scores,
             recording,
             reference_playing: self.reference_playing.load(Ordering::SeqCst),
             active_clip_variant: self.current_variant(),
             has_flowalyzed_clip: self.has_flowalyzed_clip(),
-            recipe_state: None,
-            error: None,
+            recipe_state,
+            error,
         }
     }
 
@@ -194,9 +229,7 @@ impl SessionRuntime {
                 });
                 self.reference_playing.store(true, Ordering::SeqCst);
                 *self.playback_state.lock().unwrap() = Some(PlaybackState { sink: sink_arc });
-                let _ = self
-                    .snapshot_sender
-                    .send(self.build_snapshot(PronunciationScores::default()));
+                let _ = self.snapshot_sender.send(self.build_snapshot());
             }
         }
     }
@@ -208,9 +241,7 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            let _ = self
-                .snapshot_sender
-                .send(self.build_snapshot(PronunciationScores::default()));
+            let _ = self.snapshot_sender.send(self.build_snapshot());
         }
     }
 
@@ -231,25 +262,64 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            let _ = self
-                .snapshot_sender
-                .send(self.build_snapshot(PronunciationScores::default()));
+            let _ = self.snapshot_sender.send(self.build_snapshot());
         }
     }
 
     fn handle_apply_recipe(&self, start_sec: f64, end_sec: f64, recipe: Recipe) {
+        self.recipe_progress_snapshot(RecipeApplicationStage::ExtractingAudio, 1, 3, None);
+        self.recipe_progress_snapshot(RecipeApplicationStage::ApplyingRecipe, 2, 3, None);
         match apply_recipe_to_range(&self.reference_clip, start_sec, end_sec, &recipe) {
             Ok(flowalyzed) => {
                 *self.flowalyzed_clip.lock().unwrap() = Some(flowalyzed);
-                let mut snapshot = self.build_snapshot(PronunciationScores::default());
-                snapshot.has_flowalyzed_clip = true;
-                let _ = self.snapshot_sender.send(snapshot);
+                self.recipe_progress_snapshot(RecipeApplicationStage::SavingResult, 3, 3, None);
             }
             Err(err) => {
-                let mut snapshot = self.build_snapshot(PronunciationScores::default());
-                snapshot.error = Some(err.to_string());
-                let _ = self.snapshot_sender.send(snapshot);
+                self.recipe_progress_snapshot(
+                    RecipeApplicationStage::ApplyingRecipe,
+                    2,
+                    3,
+                    Some(err.to_string()),
+                );
             }
+        }
+    }
+
+    fn recipe_progress_snapshot(
+        &self,
+        stage: RecipeApplicationStage,
+        completed_steps: u32,
+        total_steps: u32,
+        error: Option<String>,
+    ) {
+        let progress = self.recipe_progress(stage, completed_steps, total_steps);
+        let snapshot = self.snapshot_internal(
+            AlignmentReport::default(),
+            PronunciationScores::default(),
+            false,
+            Some(progress),
+            error,
+        );
+        let _ = self.snapshot_sender.send(snapshot);
+    }
+
+    fn recipe_progress(
+        &self,
+        stage: RecipeApplicationStage,
+        completed_steps: u32,
+        total_steps: u32,
+    ) -> RecipeApplicationProgress {
+        RecipeApplicationProgress {
+            stage,
+            completed_steps,
+            total_steps,
+            sub_stage_index: 0,
+            sub_stage_total: 0,
+            sub_stage_label: None,
+            metric_label: None,
+            current_value: None,
+            total_value: None,
+            elapsed_secs: None,
         }
     }
 
@@ -274,12 +344,10 @@ impl SessionRuntime {
                 if let Ok(mut active) = self.active_variant.lock() {
                     *active = variant;
                 }
-                let _ = self
-                    .snapshot_sender
-                    .send(self.build_snapshot(PronunciationScores::default()));
+                let _ = self.snapshot_sender.send(self.build_snapshot());
             }
             None => {
-                let mut snapshot = self.build_snapshot(PronunciationScores::default());
+                let mut snapshot = self.build_snapshot();
                 snapshot.error = Some("flowalyzed clip not available".to_string());
                 let _ = self.snapshot_sender.send(snapshot);
             }
@@ -295,8 +363,152 @@ impl SessionRuntime {
     }
 }
 
+fn required_raw_samples(target_len: usize, input_rate: u32, output_rate: u32) -> usize {
+    (target_len as u64 * input_rate as u64)
+        .div_ceil(output_rate as u64) as usize
+}
+
+#[allow(dead_code)]
+fn collect_resampled_chunk<F>(
+    next_chunk: &mut F,
+    target_len: usize,
+    input_rate: u32,
+    output_rate: u32,
+) -> std::result::Result<Option<Vec<f32>>, PronunciationError>
+where
+    F: FnMut() -> Option<Vec<f32>>,
+{
+    if input_rate == 0 || output_rate == 0 {
+        return Err(PronunciationError::new("sample rate must be positive"));
+    }
+    let mut raw_samples = Vec::new();
+    let mut required = required_raw_samples(target_len, input_rate, output_rate);
+
+    loop {
+        while raw_samples.len() < required {
+            match next_chunk() {
+                Some(chunk) => raw_samples.extend_from_slice(&chunk),
+                None => return Ok(None),
+            }
+        }
+
+        if input_rate == output_rate {
+            return Ok(Some(raw_samples));
+        }
+
+        let resampled = linear_resample(&raw_samples, input_rate, output_rate)
+            .map_err(|err| PronunciationError::new(err.to_string()))?;
+
+        if resampled.len() >= target_len {
+            return Ok(Some(resampled));
+        }
+
+        let shortfall = target_len - resampled.len();
+        let extra = required_raw_samples(shortfall, input_rate, output_rate).max(1);
+        required = raw_samples.len() + extra;
+    }
+}
+
+type ChunkResult = std::result::Result<Option<(Vec<f32>, Vec<f32>)>, PronunciationError>;
+
+fn collect_resampled_chunk_from_buffer(
+    buffer: &[f32],
+    target_len: usize,
+    input_rate: u32,
+    output_rate: u32,
+) -> ChunkResult {
+    if buffer.is_empty() {
+        return Ok(None);
+    }
+    let required = required_raw_samples(target_len, input_rate, output_rate);
+    if buffer.len() < required {
+        return Ok(None);
+    }
+    let (to_process, remainder) = buffer.split_at(required);
+    let resampled = if input_rate == output_rate {
+        to_process.to_vec()
+    } else {
+        linear_resample(to_process, input_rate, output_rate)
+            .map_err(|err| PronunciationError::new(err.to_string()))?
+    };
+    if resampled.len() < target_len {
+        // Should not happen given required calculation, but guard anyway.
+        return Ok(None);
+    }
+    Ok(Some((resampled, remainder.to_vec())))
+}
+
 struct PlaybackState {
     sink: Arc<Sink>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
+    };
+
+    #[test]
+    fn required_samples_scale_with_input_rate() {
+        let target_len = 1_600; // 100ms at 16kHz
+        let required = required_raw_samples(target_len, 44_100, 16_000);
+        assert_eq!(required, 4_410);
+    }
+
+    #[test]
+    fn resampled_chunk_meets_target_length() {
+        let target_len = 1_600;
+        let mut remaining_chunks = vec![vec![0.0_f32; 2_205]; 2].into_iter();
+        let mut provider = || remaining_chunks.next();
+        let resampled =
+            collect_resampled_chunk(&mut provider, target_len, 44_100, 16_000).unwrap();
+        let samples = resampled.expect("expected samples");
+        assert!(
+            samples.len() >= target_len,
+            "resampled chunk should meet or exceed target length"
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_chunks_available() {
+        let mut provider = || -> Option<Vec<f32>> { None };
+        let resampled = collect_resampled_chunk(&mut provider, 1_000, 16_000, 16_000).unwrap();
+        assert!(resampled.is_none());
+    }
+
+    #[test]
+    fn same_rate_chunks_meet_target_length() {
+        let target_len = 1_600;
+        let mut remaining_chunks = vec![vec![0.0_f32; target_len / 2]; 2].into_iter();
+        let mut provider = || remaining_chunks.next();
+        let resampled = collect_resampled_chunk(&mut provider, target_len, 16_000, 16_000).unwrap();
+        let samples = resampled.expect("expected samples");
+        assert!(
+            samples.len() >= target_len,
+            "same-rate chunk should meet or exceed target length"
+        );
+    }
+
+    #[test]
+    fn buffered_collection_emits_and_retain_remainder() {
+        let target_len = 1_600;
+        let input_rate = 48_000;
+        let output_rate = 16_000;
+        let required = required_raw_samples(target_len, input_rate, output_rate);
+        let buffer = vec![0.1_f32; required + 100];
+        let result = collect_resampled_chunk_from_buffer(&buffer, target_len, input_rate, output_rate)
+            .expect("should resample");
+        let (processed, remainder) = result.expect("expected a processed chunk");
+        assert!(
+            processed.len() >= target_len,
+            "processed chunk should meet target length"
+        );
+        assert_eq!(
+            remainder.len(),
+            100,
+            "should retain unconsumed samples as remainder"
+        );
+    }
 }
 
 pub struct SessionHandle {

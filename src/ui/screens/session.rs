@@ -6,7 +6,7 @@ use crate::pronunciation::session::{
 };
 use crate::types::{Recipe, RecipeStep};
 use eframe::egui;
-use eframe::egui::Color32;
+use eframe::egui::{Color32, Painter, Pos2, Rect, Sense, Stroke, Vec2};
 
 const HISTORY_WINDOW_MS: usize = 30_000;
 const FRAME_HOP_MS: usize = 10;
@@ -139,6 +139,15 @@ impl SessionApp {
         if let Some(err) = &self.control_error {
             ui.colored_label(Color32::RED, err);
         }
+
+        if let Some(state) = &self.snapshot.recipe_state {
+            ui.label(format!(
+                "Recipe: {} ({}/{})",
+                state.stage.label(),
+                state.completed_steps,
+                state.total_steps
+            ));
+        }
     }
 
     fn show_status(&self, ui: &mut egui::Ui) {
@@ -186,21 +195,31 @@ impl SessionApp {
     }
 
     fn show_visualizations(&self, ui: &mut egui::Ui) {
-        ui.label(format!(
-            "Latest energy ref/learner: {:.3} / {:.3}",
-            last_value(&self.histories.reference_energy),
-            last_value(&self.histories.learner_energy)
-        ));
-        ui.label(format!(
-            "Latest pitch ref/learner: {:.3} / {:.3}",
-            last_value(&self.histories.reference_pitch),
-            last_value(&self.histories.learner_pitch)
-        ));
-        ui.label(format!(
-            "Latest similarity/contour: {:.3} / {:.3}",
-            last_value(&self.histories.similarity),
-            last_value(&self.histories.contour)
-        ));
+        draw_history_plot(
+            ui,
+            "Waveform energy",
+            &self.histories.reference_energy,
+            &self.histories.learner_energy,
+            (Color32::LIGHT_BLUE, Color32::LIGHT_RED),
+        );
+        draw_history_plot(
+            ui,
+            "Pitch contour (Hz)",
+            &self.histories.reference_pitch,
+            &self.histories.learner_pitch,
+            (Color32::LIGHT_GREEN, Color32::LIGHT_YELLOW),
+        );
+        draw_history_plot(
+            ui,
+            "Similarity / contour",
+            &self.histories.similarity,
+            &self.histories.contour,
+            (
+                Color32::from_rgb(0xE0, 0x9C, 0x35),
+                Color32::from_rgb(0x8A, 0x2B, 0xE2),
+            ),
+        );
+        draw_comparison_panel(ui, &self.histories.similarity, &self.histories.contour);
     }
 
     fn parse_recipe_bounds(&self) -> Result<(f64, f64), String> {
@@ -303,8 +322,171 @@ fn trim_to_window(history: &mut VecDeque<f32>) {
     }
 }
 
-fn last_value(history: &VecDeque<f32>) -> f32 {
-    history.back().copied().unwrap_or(0.0)
+fn draw_history_plot(
+    ui: &mut egui::Ui,
+    title: &str,
+    reference: &VecDeque<f32>,
+    learner: &VecDeque<f32>,
+    colors: (Color32, Color32),
+) {
+    ui.label(title);
+    let desired = Vec2::new(ui.available_width(), 120.0);
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        4.0,
+        Color32::from_gray(0x12),
+        Stroke::new(1.0, Color32::from_gray(0x44)),
+    );
+    let inner = rect.shrink(6.0);
+    draw_history_line(painter, inner, reference, colors.0);
+    draw_history_line(painter, inner, learner, colors.1);
+}
+
+fn draw_history_line(painter: &Painter, rect: Rect, history: &VecDeque<f32>, color: Color32) {
+    if history.len() < 2 {
+        return;
+    }
+
+    let (min, max) = history
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
+            (min.min(value), max.max(value))
+        });
+    let range = (max - min).max(1e-4);
+    let len = history.len();
+    let mut points = Vec::with_capacity(len);
+    for (idx, &value) in history.iter().enumerate() {
+        let t = if len > 1 {
+            idx as f32 / (len - 1) as f32
+        } else {
+            0.5
+        };
+        let x = rect.left() + t * rect.width();
+        let normalized = (value - min) / range;
+        let y = rect.bottom() - normalized * rect.height();
+        points.push(Pos2::new(x, y));
+    }
+
+    for segment in points.windows(2) {
+        painter.line_segment([segment[0], segment[1]], Stroke::new(1.5, color));
+    }
+}
+
+fn draw_comparison_panel(ui: &mut egui::Ui, similarity: &VecDeque<f32>, contour: &VecDeque<f32>) {
+    ui.label("Spectrogram comparison");
+    let desired = Vec2::new(ui.available_width(), 120.0);
+    let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        4.0,
+        Color32::from_gray(0x10),
+        Stroke::new(1.0, Color32::from_gray(0x44)),
+    );
+    let inner = rect.shrink(4.0);
+    const ROWS: usize = 2;
+    let rows = ROWS;
+    let max_columns = HISTORY_CAPACITY_FRAMES / 10; // ~300 columns at 10ms hop = 3s segments; still under 300
+    let columns = max_columns.clamp(32, HISTORY_CAPACITY_FRAMES);
+    for row in 0..rows {
+        let source = if row == 0 { similarity } else { contour };
+        draw_row(
+            painter,
+            inner,
+            row,
+            columns,
+            source,
+            if row == 0 {
+                |value| similarity_color(value)
+            } else {
+                |value| contour_color(value)
+            },
+        );
+    }
+
+    ui.horizontal(|ui| {
+        ui.colored_label(Color32::LIGHT_BLUE, "Similarity");
+        ui.colored_label(Color32::LIGHT_RED, "Contour");
+    });
+}
+
+fn draw_row<F>(
+    painter: &Painter,
+    inner: Rect,
+    row: usize,
+    columns: usize,
+    source: &VecDeque<f32>,
+    color_fn: F,
+) where
+    F: Fn(f32) -> Color32,
+{
+    if source.is_empty() {
+        return;
+    }
+    let length = source.len();
+    let column_width = (inner.width() / columns as f32).max(1.0);
+    let column_height = inner.height() / 2.0;
+    for col in 0..columns {
+        let sample_idx =
+            ((col as f32) * length as f32 / columns as f32).min((length - 1) as f32) as usize;
+        let value = *source.get(sample_idx).unwrap_or(&0.0);
+        let color = color_fn(value);
+        let left = inner.left() + col as f32 * column_width;
+        let right = left + column_width - 1.0;
+        let top = inner.top() + row as f32 * column_height;
+        let bottom = top + column_height - 1.0;
+        let cell_rect = Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom));
+        painter.rect_filled(cell_rect, 2.0, color);
+    }
+}
+
+fn similarity_color(value: f32) -> Color32 {
+    gradient_color(
+        value,
+        &[
+            (0.0, Color32::from_rgb(255, 0, 0)),
+            (0.3, Color32::from_rgb(255, 165, 0)),
+            (0.6, Color32::from_rgb(0, 255, 0)),
+            (1.0, Color32::from_rgb(0, 0, 255)),
+        ],
+    )
+}
+
+fn contour_color(value: f32) -> Color32 {
+    gradient_color(
+        value,
+        &[
+            (0.0, Color32::from_rgb(0, 0, 128)),
+            (0.5, Color32::from_rgb(128, 0, 255)),
+            (1.0, Color32::from_rgb(255, 0, 0)),
+        ],
+    )
+}
+
+fn gradient_color(value: f32, stops: &[(f32, Color32)]) -> Color32 {
+    let v = value.clamp(0.0, 1.0);
+    if let Some((first_pos, first_color)) = stops.first() {
+        if v <= *first_pos {
+            return *first_color;
+        }
+    }
+    for window in stops.windows(2) {
+        if v >= window[0].0 && v <= window[1].0 {
+            let t = (v - window[0].0) / (window[1].0 - window[0].0);
+            return lerp_color(window[0].1, window[1].1, t);
+        }
+    }
+    stops.last().map(|(_, c)| *c).unwrap_or(Color32::WHITE)
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let ta = t.clamp(0.0, 1.0);
+    let r = a.r() as f32 + (b.r() as f32 - a.r() as f32) * ta;
+    let g = a.g() as f32 + (b.g() as f32 - a.g() as f32) * ta;
+    let b = a.b() as f32 + (b.b() as f32 - a.b() as f32) * ta;
+    Color32::from_rgb(r as u8, g as u8, b as u8)
 }
 
 #[cfg(test)]

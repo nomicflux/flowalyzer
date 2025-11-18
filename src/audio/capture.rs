@@ -19,17 +19,21 @@ pub struct CaptureConfig {
     pub device_name: Option<String>,
     pub sample_rate: u32,
     pub latency_ms: RangeInclusive<u32>,
-    pub duration: Duration,
 }
 
 impl CaptureConfig {
-    pub fn new(duration: Duration) -> Self {
+    pub fn new() -> Self {
         Self {
             device_name: None,
             sample_rate: DEFAULT_SAMPLE_RATE,
             latency_ms: default_latency_range(),
-            duration,
         }
+    }
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -51,10 +55,10 @@ pub struct LiveCapture {
     sample_rate: u32,
 }
 
-pub fn record_audio(config: &CaptureConfig) -> Result<AudioData> {
+pub fn record_audio(config: &CaptureConfig, duration: Duration) -> Result<AudioData> {
     let device = select_device(config)?;
     let setup = build_stream(&device, config)?;
-    let frames_needed = frames_for_duration(config.duration, setup.sample_rate);
+    let frames_needed = frames_for_duration(duration, setup.sample_rate);
     let raw = collect_samples(
         setup.stream,
         setup.receiver,

@@ -34,3 +34,49 @@ fn mismatched_chunks_reduce_confidence() {
     assert!(report.confidence < 0.8);
     assert_eq!(report.global_time_offset_ms, 120.0);
 }
+
+#[test]
+fn contour_penalizes_unvoiced_frames() {
+    let reference = FeatureFrames {
+        energy: vec![0.5, 0.6, 0.55],
+        pitch: vec![220.0, 0.0, 230.0],
+    };
+    let learner = FeatureFrames {
+        energy: vec![0.5, 0.6, 0.55],
+        pitch: vec![220.0, 225.0, 0.0],
+    };
+    let report = align_features(&reference, &learner, 0.0);
+    assert_eq!(report.contour_band.len(), 3);
+    // Middle frame should be penalized to 0 due to unvoiced pitch on one side.
+    assert_eq!(report.contour_band[1], 0.0);
+}
+
+#[test]
+fn contour_drops_to_zero_for_octave_difference() {
+    let reference = FeatureFrames {
+        energy: vec![0.5],
+        pitch: vec![220.0],
+    };
+    let learner = FeatureFrames {
+        energy: vec![0.5],
+        pitch: vec![440.0],
+    };
+    let report = align_features(&reference, &learner, 0.0);
+    assert_eq!(report.contour_band.len(), 1);
+    assert_eq!(report.contour_band[0], 0.0);
+}
+
+#[test]
+fn contour_treats_mutual_silence_as_match() {
+    let reference = FeatureFrames {
+        energy: vec![0.0, 0.0],
+        pitch: vec![0.0, 0.0],
+    };
+    let learner = FeatureFrames {
+        energy: vec![0.0, 0.0],
+        pitch: vec![0.0, 0.0],
+    };
+    let report = align_features(&reference, &learner, 0.0);
+    assert_eq!(report.contour_band.len(), 2);
+    assert!(report.contour_band.iter().all(|v| (*v - 1.0).abs() < 1e-6));
+}
