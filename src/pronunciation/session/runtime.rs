@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::audio::capture::{CaptureConfig, LiveCapture};
+use crate::audio::capture::{CaptureBuilder, CaptureConfig, CaptureSource, LiveCaptureBuilder};
 use crate::audio::playback::duplicate_to_stereo;
 use crate::audio::resample::linear_resample;
 use crate::pronunciation::session::{
@@ -45,12 +45,21 @@ pub struct SessionRuntime {
     snapshot_sender: Sender<SessionSnapshot>,
     command_receiver: Receiver<SessionCommand>,
     capture_buffer: Arc<Mutex<Vec<f32>>>,
+    capture_builder: Arc<dyn CaptureBuilder>,
 }
 
 impl SessionRuntime {
     pub fn spawn(
         reference_clip: RecordedClip,
         config: SessionConfig,
+    ) -> (SessionHandle, SessionController) {
+        Self::spawn_with_capture_builder(reference_clip, config, Arc::new(LiveCaptureBuilder))
+    }
+
+    pub fn spawn_with_capture_builder(
+        reference_clip: RecordedClip,
+        config: SessionConfig,
+        capture_builder: Arc<dyn CaptureBuilder>,
     ) -> (SessionHandle, SessionController) {
         assert!(
             !reference_clip.samples.is_empty(),
@@ -71,6 +80,7 @@ impl SessionRuntime {
             snapshot_sender: snapshot_tx,
             command_receiver: command_rx,
             capture_buffer: Arc::new(Mutex::new(Vec::new())),
+            capture_builder,
         };
         let handle = SessionHandle {
             snapshot_receiver: snapshot_rx,
@@ -86,22 +96,44 @@ impl SessionRuntime {
 
     fn run(self) {
         let mut recording = false;
-        let mut capture: Option<LiveCapture> = None;
+        let mut capture: Option<Box<dyn CaptureSource>> = None;
         loop {
             match self.command_receiver.try_recv() {
                 Ok(SessionCommand::Start) => {
                     recording = true;
-                    capture = self.start_capture().ok();
+                    if let Some(mut active) = capture.take() {
+                        active.stop();
+                    }
+                    Self::clear_buffer(&self.capture_buffer);
+                    match self.start_capture() {
+                        Ok(new_capture) => {
+                            capture = Some(new_capture);
+                        }
+                        Err(err) => {
+                            recording = false;
+                            let mut snapshot = self.build_snapshot();
+                            snapshot.error = Some(err.to_string());
+                            let _ = self.snapshot_sender.send(snapshot);
+                        }
+                    }
                     if let Ok(mut engine) = self.engine.lock() {
                         engine.reset();
                     }
                 }
                 Ok(SessionCommand::Stop) => {
                     recording = false;
-                    capture = None;
+                    if let Some(mut active) = capture.take() {
+                        active.stop();
+                    }
+                    Self::clear_buffer(&self.capture_buffer);
                     let _ = self.snapshot_sender.send(self.build_snapshot());
                 }
-                Ok(SessionCommand::Shutdown) => break,
+                Ok(SessionCommand::Shutdown) => {
+                    if let Some(mut active) = capture.take() {
+                        active.stop();
+                    }
+                    break;
+                }
                 Ok(SessionCommand::ReplayReference) => {
                     self.start_reference_playback();
                 }
@@ -121,8 +153,8 @@ impl SessionRuntime {
             }
 
             if recording {
-                if let Some(ref cap) = capture {
-                    self.process_capture_chunk(cap);
+                if let Some(cap) = capture.as_mut() {
+                    self.process_capture_chunk(cap.as_mut());
                 }
             }
 
@@ -131,14 +163,19 @@ impl SessionRuntime {
         }
     }
 
-    fn start_capture(&self) -> Result<LiveCapture> {
+    fn start_capture(&self) -> Result<Box<dyn CaptureSource>> {
         let mut capture_config = CaptureConfig::new();
-        capture_config.sample_rate = self.config.sample_rate;
+        capture_config.sample_rate = self
+            .config
+            .capture_sample_rate
+            .unwrap_or(self.config.sample_rate);
         capture_config.latency_ms = self.config.latency_range.clone();
-        LiveCapture::start(&capture_config).map_err(|err| PronunciationError::new(err.to_string()))
+        self.capture_builder
+            .start_capture(&capture_config)
+            .map_err(|err| PronunciationError::new(err.to_string()))
     }
 
-    fn process_capture_chunk(&self, capture: &LiveCapture) {
+    fn process_capture_chunk(&self, capture: &mut dyn CaptureSource) {
         let timeout = Duration::from_millis(self.config.chunk_duration_ms as u64);
         let target_len =
             (self.config.sample_rate as usize * self.config.chunk_duration_ms as usize) / 1_000;
@@ -361,11 +398,20 @@ impl SessionRuntime {
     fn has_flowalyzed_clip(&self) -> bool {
         self.flowalyzed_clip.lock().unwrap().is_some()
     }
+
+    fn clear_buffer(buffer: &Arc<Mutex<Vec<f32>>>) {
+        if let Ok(mut guard) = buffer.lock() {
+            guard.clear();
+        }
+    }
 }
 
 fn required_raw_samples(target_len: usize, input_rate: u32, output_rate: u32) -> usize {
-    (target_len as u64 * input_rate as u64)
-        .div_ceil(output_rate as u64) as usize
+    assert!(
+        input_rate > 0 && output_rate > 0,
+        "sample rates must be positive"
+    );
+    (target_len as u64 * input_rate as u64).div_ceil(output_rate as u64) as usize
 }
 
 #[allow(dead_code)]
@@ -392,18 +438,22 @@ where
             }
         }
 
-        if input_rate == output_rate {
-            return Ok(Some(raw_samples));
+        let output = if input_rate == output_rate {
+            raw_samples.clone()
+        } else {
+            linear_resample(&raw_samples, input_rate, output_rate)
+                .map_err(|err| PronunciationError::new(err.to_string()))?
+        };
+
+        if output.len() >= target_len {
+            let mut chunk = output;
+            if chunk.len() > target_len {
+                chunk.truncate(target_len);
+            }
+            return Ok(Some(chunk));
         }
 
-        let resampled = linear_resample(&raw_samples, input_rate, output_rate)
-            .map_err(|err| PronunciationError::new(err.to_string()))?;
-
-        if resampled.len() >= target_len {
-            return Ok(Some(resampled));
-        }
-
-        let shortfall = target_len - resampled.len();
+        let shortfall = target_len - output.len();
         let extra = required_raw_samples(shortfall, input_rate, output_rate).max(1);
         required = raw_samples.len() + extra;
     }
@@ -440,75 +490,6 @@ fn collect_resampled_chunk_from_buffer(
 
 struct PlaybackState {
     sink: Arc<Sink>,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
-    };
-
-    #[test]
-    fn required_samples_scale_with_input_rate() {
-        let target_len = 1_600; // 100ms at 16kHz
-        let required = required_raw_samples(target_len, 44_100, 16_000);
-        assert_eq!(required, 4_410);
-    }
-
-    #[test]
-    fn resampled_chunk_meets_target_length() {
-        let target_len = 1_600;
-        let mut remaining_chunks = vec![vec![0.0_f32; 2_205]; 2].into_iter();
-        let mut provider = || remaining_chunks.next();
-        let resampled =
-            collect_resampled_chunk(&mut provider, target_len, 44_100, 16_000).unwrap();
-        let samples = resampled.expect("expected samples");
-        assert!(
-            samples.len() >= target_len,
-            "resampled chunk should meet or exceed target length"
-        );
-    }
-
-    #[test]
-    fn returns_none_when_no_chunks_available() {
-        let mut provider = || -> Option<Vec<f32>> { None };
-        let resampled = collect_resampled_chunk(&mut provider, 1_000, 16_000, 16_000).unwrap();
-        assert!(resampled.is_none());
-    }
-
-    #[test]
-    fn same_rate_chunks_meet_target_length() {
-        let target_len = 1_600;
-        let mut remaining_chunks = vec![vec![0.0_f32; target_len / 2]; 2].into_iter();
-        let mut provider = || remaining_chunks.next();
-        let resampled = collect_resampled_chunk(&mut provider, target_len, 16_000, 16_000).unwrap();
-        let samples = resampled.expect("expected samples");
-        assert!(
-            samples.len() >= target_len,
-            "same-rate chunk should meet or exceed target length"
-        );
-    }
-
-    #[test]
-    fn buffered_collection_emits_and_retain_remainder() {
-        let target_len = 1_600;
-        let input_rate = 48_000;
-        let output_rate = 16_000;
-        let required = required_raw_samples(target_len, input_rate, output_rate);
-        let buffer = vec![0.1_f32; required + 100];
-        let result = collect_resampled_chunk_from_buffer(&buffer, target_len, input_rate, output_rate)
-            .expect("should resample");
-        let (processed, remainder) = result.expect("expected a processed chunk");
-        assert!(
-            processed.len() >= target_len,
-            "processed chunk should meet target length"
-        );
-        assert_eq!(
-            remainder.len(),
-            100,
-            "should retain unconsumed samples as remainder"
-        );
-    }
 }
 
 pub struct SessionHandle {
@@ -583,5 +564,139 @@ impl SessionController {
         self.command_sender
             .send(SessionCommand::Shutdown)
             .map_err(|_| PronunciationError::new("runtime disconnected"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::PI;
+
+    use crate::pronunciation::session::{SessionConfig, SessionEngine};
+
+    use super::{
+        collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
+    };
+
+    #[test]
+    fn required_samples_scale_with_input_rate() {
+        let target_len = 1_600; // 100ms at 16kHz
+        let required = required_raw_samples(target_len, 44_100, 16_000);
+        assert_eq!(required, 4_410);
+    }
+
+    #[test]
+    fn resampled_chunk_meets_target_length() {
+        let target_len = 1_600;
+        let mut remaining_chunks = vec![vec![0.0_f32; 2_205]; 2].into_iter();
+        let mut provider = || remaining_chunks.next();
+        let resampled = collect_resampled_chunk(&mut provider, target_len, 44_100, 16_000).unwrap();
+        let samples = resampled.expect("expected samples");
+        assert!(
+            samples.len() >= target_len,
+            "resampled chunk should meet or exceed target length"
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_chunks_available() {
+        let mut provider = || -> Option<Vec<f32>> { None };
+        let resampled = collect_resampled_chunk(&mut provider, 1_000, 16_000, 16_000).unwrap();
+        assert!(resampled.is_none());
+    }
+
+    #[test]
+    fn same_rate_chunks_meet_target_length() {
+        let target_len = 1_600;
+        let mut remaining_chunks = vec![vec![0.0_f32; target_len / 2]; 2].into_iter();
+        let mut provider = || remaining_chunks.next();
+        let resampled = collect_resampled_chunk(&mut provider, target_len, 16_000, 16_000).unwrap();
+        let samples = resampled.expect("expected samples");
+        assert!(
+            samples.len() >= target_len,
+            "same-rate chunk should meet or exceed target length"
+        );
+    }
+
+    #[test]
+    fn buffered_collection_emits_and_retain_remainder() {
+        let target_len = 1_600;
+        let input_rate = 48_000;
+        let output_rate = 16_000;
+        let required = required_raw_samples(target_len, input_rate, output_rate);
+        let buffer = vec![0.1_f32; required + 100];
+        let result =
+            collect_resampled_chunk_from_buffer(&buffer, target_len, input_rate, output_rate)
+                .expect("should resample");
+        let (processed, remainder) = result.expect("expected a processed chunk");
+        assert!(
+            processed.len() >= target_len,
+            "processed chunk should meet target length"
+        );
+        assert_eq!(
+            remainder.len(),
+            100,
+            "should retain unconsumed samples as remainder"
+        );
+    }
+
+    #[test]
+    fn capture_pipeline_produces_voiced_pitch() {
+        fn sine_wave(sample_rate: u32, frequency: f32, duration_secs: f32) -> Vec<f32> {
+            let total_samples = (sample_rate as f32 * duration_secs) as usize;
+            (0..total_samples)
+                .map(|i| {
+                    (2.0 * PI * frequency * i as f32 / sample_rate as f32)
+                        .sin()
+                        .clamp(-1.0, 1.0)
+                })
+                .collect()
+        }
+
+        let config = SessionConfig {
+            chunk_duration_ms: 150,
+            ..Default::default()
+        };
+        let reference = sine_wave(config.sample_rate, 220.0, 2.0);
+        let mut engine = SessionEngine::new(&reference, &config);
+
+        let device_rate = 48_000;
+        let capture_signal = sine_wave(device_rate, 220.0, 2.0);
+        let device_chunk = 480; // ~10ms at 48kHz
+        let target_len = (config.sample_rate as usize * config.chunk_duration_ms as usize) / 1_000;
+
+        let mut device_buffer = Vec::new();
+        let mut emitted_voiced_frames = 0usize;
+        let mut index = 0;
+        while index < capture_signal.len() {
+            let end = (index + device_chunk).min(capture_signal.len());
+            device_buffer.extend_from_slice(&capture_signal[index..end]);
+            index = end;
+
+            loop {
+                match collect_resampled_chunk_from_buffer(
+                    &device_buffer,
+                    target_len,
+                    device_rate,
+                    config.sample_rate,
+                ) {
+                    Ok(Some((chunk, remainder))) => {
+                        device_buffer = remainder;
+                        let report = engine.process_chunk(&chunk);
+                        emitted_voiced_frames += report
+                            .learner_pitch
+                            .iter()
+                            .filter(|value| **value > 0.0)
+                            .count();
+                    }
+                    Ok(None) => break,
+                    Err(err) => panic!("resample error: {}", err),
+                }
+            }
+        }
+
+        assert!(
+            emitted_voiced_frames > 0,
+            "capture pipeline should yield voiced pitch frames"
+        );
     }
 }

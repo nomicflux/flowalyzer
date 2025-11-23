@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::pronunciation::features::FeatureFrames;
+use crate::pronunciation::features::{ChunkFeatures, ReferenceFeatures};
 use crate::pronunciation::session::AlignmentReport;
 
 const FRAME_HOP_MS: u64 = 10;
@@ -15,8 +15,8 @@ impl StatelessAligner {
 
     pub fn align(
         &self,
-        reference: &FeatureFrames,
-        learner: &FeatureFrames,
+        reference: &ReferenceFeatures,
+        learner: &ChunkFeatures,
         global_offset_ms: f32,
     ) -> AlignmentReport {
         align_features(reference, learner, global_offset_ms)
@@ -24,10 +24,43 @@ impl StatelessAligner {
 }
 
 pub fn align_features(
-    reference: &FeatureFrames,
-    learner: &FeatureFrames,
+    reference: &ReferenceFeatures,
+    learner: &ChunkFeatures,
     global_offset_ms: f32,
 ) -> AlignmentReport {
+    assert_eq!(
+        learner.energy.len(),
+        learner.pitch.len(),
+        "learner frames must align"
+    );
+    assert!(
+        reference.energy.len() >= learner.energy.len(),
+        "reference energy frames exhausted ({} available, {} required)",
+        reference.energy.len(),
+        learner.energy.len()
+    );
+    assert!(
+        reference.pitch.len() >= learner.pitch.len(),
+        "reference pitch frames exhausted ({} available, {} required)",
+        reference.pitch.len(),
+        learner.pitch.len()
+    );
+    assert!(
+        reference.frame_starts.len() >= learner.frame_starts.len(),
+        "reference frame indices exhausted"
+    );
+    for (ref_idx, learner_idx) in reference
+        .frame_starts
+        .iter()
+        .zip(learner.frame_starts.iter())
+        .take(learner.frame_starts.len())
+    {
+        assert_eq!(
+            ref_idx, learner_idx,
+            "frame index mismatch between reference and learner"
+        );
+    }
+
     let similarity = compute_similarity(&reference.energy, &learner.energy);
     let contour = compute_contour_similarity(&reference.pitch, &learner.pitch);
     let confidence = compute_confidence(&similarity, &contour);
@@ -47,35 +80,40 @@ pub fn align_features(
 }
 
 fn compute_similarity(reference: &[f32], learner: &[f32]) -> Vec<f32> {
-    let len = reference.len().min(learner.len());
-    (0..len)
+    assert_eq!(reference.len(), learner.len(), "frames must align");
+    (0..reference.len())
         .map(|index| frame_similarity(reference[index], learner[index]))
         .collect()
 }
 
 fn frame_similarity(reference_value: f32, learner_value: f32) -> f32 {
     let diff = (reference_value - learner_value).abs();
-    let max_value = reference_value.abs().max(learner_value.abs()).max(1e-3);
-    (1.0 - diff / max_value).clamp(0.0, 1.0)
+    let max_value = reference_value
+        .abs()
+        .max(learner_value.abs())
+        .max(f32::MIN_POSITIVE);
+    1.0 - diff / max_value
 }
 
 fn compute_contour_similarity(reference: &[f32], learner: &[f32]) -> Vec<f32> {
-    let len = reference.len().min(learner.len());
-    if len == 0 {
+    assert_eq!(reference.len(), learner.len(), "frames must align");
+    if learner.is_empty() {
         return Vec::new();
     }
-    (0..len)
+    (0..learner.len())
         .map(|i| pitch_frame_similarity(reference[i], learner[i]))
         .collect()
 }
 
 fn pitch_frame_similarity(reference_pitch: f32, learner_pitch: f32) -> f32 {
-    // Use a minimum positive value so the ratio is well-defined; if both are zero this yields a ratio of 1.
+    assert!(
+        reference_pitch.is_finite() && learner_pitch.is_finite(),
+        "pitch values must be finite"
+    );
     let ref_p = reference_pitch.abs().max(f32::MIN_POSITIVE);
     let learner_p = learner_pitch.abs().max(f32::MIN_POSITIVE);
     let semitone_diff = (ref_p / learner_p).log2().abs() * 12.0;
-    // 12 semitones (one octave) difference yields 0. Linearly map within that band.
-    (1.0 - semitone_diff / 12.0).clamp(0.0, 1.0)
+    1.0 - semitone_diff / 12.0
 }
 
 fn compute_confidence(similarity: &[f32], contour: &[f32]) -> f32 {

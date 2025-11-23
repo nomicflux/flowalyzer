@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use tracing::error;
 
-use crate::audio::{assembler, decoder, resample};
+use crate::audio::{assembler, decoder};
 use crate::operations::recipe;
-use crate::types::{AudioChunk, AudioData, Recipe};
+use crate::types::{AudioChunk, AudioData, FrameCount, FrameIndex, FrameRange, Recipe};
 
 pub mod alignment;
 pub mod features;
@@ -18,7 +18,6 @@ pub use session::{
     RecipeApplicationStage, SessionSnapshot,
 };
 
-const TARGET_SAMPLE_RATE: u32 = 16_000;
 const MAX_CLIP_DURATION_SECS: u64 = 300; // 5 minutes
 
 /// Convenient alias for results returned by pronunciation helpers.
@@ -118,18 +117,21 @@ pub fn extract_audio_range(
     let start_sample = start_sample.min(clip.samples.len());
     let end_sample = end_sample.min(clip.samples.len());
     let samples = clip.samples[start_sample..end_sample].to_vec();
+    let frame_range = FrameRange::new(
+        FrameIndex::from(start_sample),
+        FrameCount::from(samples.len()),
+    );
     Ok(AudioChunk {
         samples,
         sample_rate: clip.sample_rate,
         start_time,
         end_time,
+        frame_range,
     })
 }
 
 fn clip_from_audio(audio: AudioData) -> Result<RecordedClip> {
-    let samples = resample::linear_resample(&audio.samples, audio.sample_rate, TARGET_SAMPLE_RATE)
-        .map_err(|err| PronunciationError::new(err.to_string()))?;
-    Ok(RecordedClip::from_samples(samples, TARGET_SAMPLE_RATE))
+    Ok(RecordedClip::from_samples(audio.samples, audio.sample_rate))
 }
 
 fn validate_clip_duration(clip: &RecordedClip) -> Result<()> {

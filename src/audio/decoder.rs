@@ -1,4 +1,4 @@
-use crate::types::AudioData;
+use crate::types::{AudioData, FrameCount, FrameIndex, FrameRange, SampleRate};
 use anyhow::{Context, Result};
 use std::path::Path;
 use symphonia::core::audio::{AudioBufferRef, Signal};
@@ -87,9 +87,12 @@ pub fn decode_audio<P: AsRef<Path>>(path: P) -> Result<AudioData> {
         all_samples.extend(mono_samples);
     }
 
+    let sample_rate = SampleRate::new(sample_rate)?;
+    let length = FrameCount::from(all_samples.len());
     Ok(AudioData {
         samples: all_samples,
-        sample_rate,
+        sample_rate: sample_rate.hz(),
+        frame_range: FrameRange::new(FrameIndex::ZERO, length),
     })
 }
 

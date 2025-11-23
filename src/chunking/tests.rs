@@ -1,5 +1,5 @@
 use super::calculate_chunk_boundaries;
-use crate::types::{ChunkConfig, Granularity, Segment, Transcript};
+use crate::types::{ChunkConfig, FrameCount, Granularity, SampleRate, Segment, Transcript};
 
 #[test]
 fn test_basic_chunking() {
@@ -26,8 +26,10 @@ fn test_basic_chunking() {
         ],
     };
 
-    let config = ChunkConfig::new(2.0);
-    let boundaries = calculate_chunk_boundaries(&transcript, config, &[]);
+    let sample_rate = SampleRate::new(44_100).unwrap();
+    let target = sample_rate.frames_from_seconds_round(2.0);
+    let config = ChunkConfig::new_frames(target, target, FrameCount::ZERO);
+    let boundaries = calculate_chunk_boundaries(&transcript, config, &[], sample_rate);
 
     assert!(!boundaries.is_empty());
     assert!(boundaries[0].end_time > boundaries[0].start_time);
@@ -44,8 +46,10 @@ fn test_long_segment_splitting() {
         }],
     };
 
-    let config = ChunkConfig::new(2.0);
-    let boundaries = calculate_chunk_boundaries(&transcript, config, &[]);
+    let sample_rate = SampleRate::new(44_100).unwrap();
+    let target = sample_rate.frames_from_seconds_round(2.0);
+    let config = ChunkConfig::new_frames(target, target, FrameCount::ZERO);
+    let boundaries = calculate_chunk_boundaries(&transcript, config, &[], sample_rate);
 
     assert!(boundaries.len() > 1);
 }
@@ -75,8 +79,12 @@ fn test_allows_small_overshoot() {
         ],
     };
 
-    let config = ChunkConfig::new(1.0);
-    let boundaries = calculate_chunk_boundaries(&transcript, config, &[]);
+    let sample_rate = SampleRate::new(44_100).unwrap();
+    let target = sample_rate.frames_from_seconds_round(1.0);
+    let overshoot = sample_rate.frames_from_seconds_round(0.8);
+    let max = target + overshoot;
+    let config = ChunkConfig::new_frames(target, max, overshoot);
+    let boundaries = calculate_chunk_boundaries(&transcript, config, &[], sample_rate);
 
     assert_eq!(boundaries.len(), 2);
     assert!((boundaries[0].start_time - 0.0).abs() < 1e-9);
@@ -98,8 +106,10 @@ fn test_segment_exceeding_overshoot_is_split() {
         }],
     };
 
-    let config = ChunkConfig::new(1.0);
-    let boundaries = calculate_chunk_boundaries(&transcript, config, &[]);
+    let sample_rate = SampleRate::new(44_100).unwrap();
+    let target = sample_rate.frames_from_seconds_round(1.0);
+    let config = ChunkConfig::new_frames(target, target, FrameCount::ZERO);
+    let boundaries = calculate_chunk_boundaries(&transcript, config, &[], sample_rate);
 
     assert_eq!(boundaries.len(), 3);
     let starts: Vec<f64> = boundaries
@@ -133,9 +143,12 @@ fn test_prefers_pause_boundaries() {
         ],
     };
 
-    let config = ChunkConfig::new(1.0);
+    let sample_rate = SampleRate::new(44_100).unwrap();
+    let target = sample_rate.frames_from_seconds_round(1.0);
+    let max = sample_rate.frames_from_seconds_round(2.3);
+    let config = ChunkConfig::new_frames(target, max, FrameCount::ZERO);
     let pauses = vec![1.2];
-    let boundaries = calculate_chunk_boundaries(&transcript, config, &pauses);
+    let boundaries = calculate_chunk_boundaries(&transcript, config, &pauses, sample_rate);
 
     assert_eq!(boundaries.len(), 2);
     assert!((boundaries[0].start_time - 0.0).abs() < 1e-9);

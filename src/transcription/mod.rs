@@ -8,6 +8,9 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
+#[cfg(test)]
+use crate::types::{FrameCount, FrameIndex, FrameRange};
+
 /// Configuration for a transcription run
 #[derive(Debug, Clone)]
 pub struct TranscriptionSettings {
@@ -94,18 +97,11 @@ pub fn transcribe_audio(audio: &AudioData, settings: &TranscriptionSettings) -> 
         // Timestamps are in centiseconds (10s of milliseconds), convert to seconds
         let start_time = segment.start_timestamp() as f64 / 100.0;
         let end_time = segment.end_timestamp() as f64 / 100.0;
-        let duration = end_time - start_time;
-        let granularity = if duration < 1.0 {
-            Granularity::Word
-        } else {
-            Granularity::Sentence
-        };
-
         segments.push(Segment {
             text,
             start_time,
             end_time,
-            granularity,
+            granularity: Granularity::Sentence,
         });
     }
 
@@ -136,6 +132,7 @@ mod tests {
         let audio = AudioData {
             samples,
             sample_rate,
+            frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(num_samples)),
         };
 
         // This will fail without the model, but shows the API usage

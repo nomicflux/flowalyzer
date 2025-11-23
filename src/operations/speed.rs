@@ -6,7 +6,7 @@
 //! - No side effects
 //! - Uses ssstretch (Signalsmith Stretch) for high-quality pitch-preserving time-stretch
 
-use crate::types::AudioChunk;
+use crate::types::{AudioChunk, FrameCount, FrameIndex, FrameRange};
 use ssstretch::Stretch;
 
 /// Changes the speed of an audio chunk without changing pitch
@@ -20,7 +20,7 @@ use ssstretch::Stretch;
 ///
 /// # Examples
 /// ```
-/// use flowalyzer::types::AudioChunk;
+/// use flowalyzer::types::{AudioChunk, FrameCount, FrameIndex, FrameRange};
 /// use flowalyzer::operations::speed::change_speed;
 ///
 /// let chunk = AudioChunk {
@@ -28,6 +28,7 @@ use ssstretch::Stretch;
 ///     sample_rate: 44100,
 ///     start_time: 0.0,
 ///     end_time: 0.1,
+///     frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(5usize)),
 /// };
 ///
 /// // Make it 50% slower (2x longer)
@@ -42,12 +43,14 @@ pub fn change_speed(chunk: &AudioChunk, speed_factor: f32) -> AudioChunk {
     let mut stretch = configured_stretch(chunk.sample_rate);
     let samples = collect_stretched_samples(&mut stretch, &chunk.samples, speed_factor);
     let new_duration = samples.len() as f64 / chunk.sample_rate as f64;
+    let frame_length = FrameCount::from(samples.len());
 
     AudioChunk {
         samples,
         sample_rate: chunk.sample_rate,
         start_time: chunk.start_time,
         end_time: chunk.start_time + new_duration,
+        frame_range: FrameRange::new(FrameIndex::ZERO, frame_length),
     }
 }
 
@@ -148,6 +151,7 @@ mod tests {
             sample_rate: 44100,
             start_time: 0.0,
             end_time: num_samples as f64 / 44100.0,
+            frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(num_samples)),
         }
     }
 

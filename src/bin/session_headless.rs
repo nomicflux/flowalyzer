@@ -20,6 +20,14 @@ struct Args {
     /// Chunk duration in milliseconds (default 100ms)
     #[arg(long, default_value_t = 100)]
     chunk_ms: u32,
+
+    /// Engine sample rate; defaults to reference clip rate
+    #[arg(long)]
+    engine_sample_rate: Option<u32>,
+
+    /// Capture sample rate; defaults to engine rate
+    #[arg(long)]
+    capture_sample_rate: Option<u32>,
 }
 
 fn main() -> Result<()> {
@@ -32,6 +40,8 @@ fn main() -> Result<()> {
 
     let config = SessionConfig {
         chunk_duration_ms: args.chunk_ms.max(10),
+        sample_rate: args.engine_sample_rate.unwrap_or(reference.sample_rate),
+        capture_sample_rate: args.capture_sample_rate,
         ..SessionConfig::default()
     };
     let mut engine = SessionEngine::new(&reference.samples, &config);

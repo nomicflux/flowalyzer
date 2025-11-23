@@ -1,4 +1,4 @@
-use crate::types::{AudioChunk, AudioData};
+use crate::types::{AudioChunk, AudioData, FrameCount, FrameIndex, FrameRange};
 
 /// Pure function to concatenate audio chunks into single continuous audio
 /// Adds a simple crossfade between chunks to prevent clicks
@@ -53,9 +53,11 @@ pub fn assemble_audio(chunks: &[AudioChunk]) -> Option<AudioData> {
         }
     }
 
+    let length = FrameCount::from(assembled.len());
     Some(AudioData {
         samples: assembled,
         sample_rate,
+        frame_range: FrameRange::new(FrameIndex::ZERO, length),
     })
 }
 
@@ -71,12 +73,14 @@ mod tests {
                 sample_rate: 44100,
                 start_time: 0.0,
                 end_time: 0.1,
+                frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(100usize)),
             },
             AudioChunk {
                 samples: vec![0.5; 100],
                 sample_rate: 44100,
                 start_time: 0.1,
                 end_time: 0.2,
+                frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(100usize)),
             },
         ];
 
@@ -105,12 +109,14 @@ mod tests {
                 sample_rate: 44100,
                 start_time: 0.0,
                 end_time: 0.1,
+                frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(100usize)),
             },
             AudioChunk {
                 samples: vec![0.5; 100],
                 sample_rate: 48000, // Different!
                 start_time: 0.1,
                 end_time: 0.2,
+                frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(100usize)),
             },
         ];
 

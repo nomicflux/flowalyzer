@@ -5,7 +5,7 @@
 //! - Returns AudioChunk with zero samples
 //! - No side effects
 
-use crate::types::AudioChunk;
+use crate::types::{AudioChunk, FrameCount, FrameIndex, FrameRange};
 
 /// Generates a silent audio chunk of specified duration
 ///
@@ -33,6 +33,7 @@ pub fn insert_silence(duration: f64, sample_rate: u32) -> AudioChunk {
         sample_rate,
         start_time: 0.0,
         end_time: duration,
+        frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(num_samples)),
     }
 }
 

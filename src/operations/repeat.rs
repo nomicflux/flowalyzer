@@ -25,6 +25,7 @@ pub fn repeat_chunk(chunk: &AudioChunk, count: u32) -> Vec<AudioChunk> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{FrameCount, FrameIndex, FrameRange};
 
     fn create_test_chunk() -> AudioChunk {
         AudioChunk {
@@ -32,6 +33,7 @@ mod tests {
             sample_rate: 44100,
             start_time: 0.0,
             end_time: 0.1,
+            frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(5usize)),
         }
     }
 

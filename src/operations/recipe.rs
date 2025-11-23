@@ -26,13 +26,16 @@ use crate::types::{AudioChunk, Recipe};
 /// # Example
 /// ```
 /// use flowalyzer::operations::recipe::apply_recipe;
-/// use flowalyzer::types::{AudioChunk, Recipe, RecipeStep};
+/// use flowalyzer::types::{
+///     AudioChunk, FrameCount, FrameIndex, FrameRange, Recipe, RecipeStep,
+/// };
 ///
 /// let chunk = AudioChunk {
 ///     samples: vec![0.0; 16_000],
 ///     sample_rate: 16_000,
 ///     start_time: 0.0,
 ///     end_time: 1.0,
+///     frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(16_000usize)),
 /// };
 /// let recipe = Recipe::new("example")
 ///     .add_step(RecipeStep {
@@ -71,7 +74,7 @@ pub fn apply_recipe(chunk: &AudioChunk, recipe: &Recipe) -> Vec<AudioChunk> {
 mod tests {
     use super::*;
     use crate::operations::speed::change_speed;
-    use crate::types::RecipeStep;
+    use crate::types::{FrameCount, FrameIndex, FrameRange, RecipeStep};
 
     fn create_test_chunk() -> AudioChunk {
         // Create a 1-second chunk
@@ -90,6 +93,7 @@ mod tests {
             sample_rate,
             start_time: 0.0,
             end_time: duration,
+            frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(num_samples)),
         }
     }
 

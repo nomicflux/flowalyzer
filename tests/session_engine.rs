@@ -1,3 +1,4 @@
+use flowalyzer::pronunciation::features::FeatureConfig;
 use flowalyzer::pronunciation::session::{SessionConfig, SessionEngine};
 
 fn reference_signal(len: usize, sample_rate: u32) -> Vec<f32> {
@@ -45,8 +46,10 @@ fn processing_multiple_chunks_updates_offset() {
 
 #[test]
 fn first_chunk_produces_feature_frames() {
-    let mut config = SessionConfig::default();
-    config.chunk_duration_ms = 200;
+    let config = SessionConfig {
+        chunk_duration_ms: 200,
+        ..Default::default()
+    };
     let reference = reference_signal((config.sample_rate * 2) as usize, config.sample_rate);
     let mut engine = SessionEngine::new(&reference, &config);
     let chunk_len = (config.sample_rate as usize * config.chunk_duration_ms as usize) / 1_000;
@@ -60,4 +63,19 @@ fn first_chunk_produces_feature_frames() {
         !report.contour_band.is_empty(),
         "contour should contain frames on first chunk"
     );
+}
+
+#[test]
+fn trimming_respects_pitch_length() {
+    let config = SessionConfig {
+        chunk_duration_ms: 150,
+        ..Default::default()
+    };
+    let reference = reference_signal((config.sample_rate * 2) as usize, config.sample_rate);
+    let mut engine = SessionEngine::new(&reference, &config);
+    let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
+    let chunk = vec![0.0; feature_cfg.frame_len_samples + feature_cfg.hop_samples];
+    let _ = engine.process_chunk(&chunk);
+    // Processing a second chunk should not panic even if learner pitch has fewer frames than energy.
+    let _report = engine.process_chunk(&chunk);
 }

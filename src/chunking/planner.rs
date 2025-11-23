@@ -1,4 +1,4 @@
-use crate::types::{ChunkBoundary, ChunkConfig, Transcript};
+use crate::types::{ChunkBoundary, ChunkConfig, SampleRate, Transcript};
 
 use super::accumulator::ChunkAccumulator;
 use super::spans::build_spans;
@@ -9,9 +9,10 @@ pub fn calculate_chunk_boundaries(
     transcript: &Transcript,
     config: ChunkConfig,
     pauses: &[f64],
+    sample_rate: SampleRate,
 ) -> Vec<ChunkBoundary> {
-    let spans = build_spans(transcript, pauses);
-    let mut accumulator = ChunkAccumulator::new();
+    let spans = build_spans(transcript, pauses, sample_rate);
+    let mut accumulator = ChunkAccumulator::new(sample_rate);
     for span in spans {
         accumulator.handle_span(span, config);
     }

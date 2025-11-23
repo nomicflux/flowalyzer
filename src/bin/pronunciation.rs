@@ -14,12 +14,24 @@ struct Args {
     /// Reference clip to shadow (wav)
     #[arg(long)]
     reference: PathBuf,
+
+    /// Engine sample rate (defaults to reference clip rate)
+    #[arg(long)]
+    engine_sample_rate: Option<u32>,
+
+    /// Capture device sample rate (defaults to engine rate)
+    #[arg(long)]
+    capture_sample_rate: Option<u32>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let clip = load_clip(&args.reference)?;
-    let config = SessionConfig::default();
+    let config = SessionConfig {
+        sample_rate: args.engine_sample_rate.unwrap_or(clip.sample_rate),
+        capture_sample_rate: args.capture_sample_rate,
+        ..SessionConfig::default()
+    };
     let (handle, controller) = SessionRuntime::spawn(clip, config);
     let app = SessionApp::new(handle, controller);
     let options = NativeOptions::default();

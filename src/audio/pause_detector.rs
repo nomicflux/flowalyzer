@@ -1,27 +1,44 @@
-use crate::types::AudioData;
+use crate::types::{AudioData, FrameCount, FrameIndex};
 
-/// Detect pause timestamps (in seconds) based on windowed energy analysis.
+/// Measure a pause threshold from the audio itself using integer frame windows.
+/// Returns the minimum window energy observed; callers can adjust if desired.
+pub fn calibrate_threshold(audio: &AudioData, window_frames: FrameCount) -> f32 {
+    if audio.samples.is_empty() || window_frames.is_zero() {
+        return 0.0;
+    }
+    let window = window_frames.as_usize().max(1);
+    let mut idx = 0;
+    let mut min_energy = f32::MAX;
+    while idx < audio.samples.len() {
+        let end = (idx + window).min(audio.samples.len());
+        let energy = window_energy(&audio.samples[idx..end]);
+        if energy < min_energy {
+            min_energy = energy;
+        }
+        idx += window;
+    }
+    if min_energy.is_finite() {
+        min_energy
+    } else {
+        0.0
+    }
+}
+
+/// Detect pause midpoints (in frame indices) using frame-based windows.
 ///
-/// # Parameters
-/// * `audio` - mono PCM data
-/// * `window_ms` - window size in milliseconds (e.g. 20.0)
-/// * `min_silence_ms` - minimum consecutive silence needed to declare a pause (e.g. 80.0)
-/// * `threshold` - amplitude threshold (linear 0.0-1.0 range) for silence detection
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn detect_pauses(
+/// All parameters are integer frame counts to align with the sample clock.
+pub fn detect_pauses_frames(
     audio: &AudioData,
-    window_ms: f64,
-    min_silence_ms: f64,
+    window_frames: FrameCount,
+    min_silence_frames: FrameCount,
     threshold: f32,
-) -> Vec<f64> {
-    if audio.samples.is_empty() {
+) -> Vec<FrameIndex> {
+    if audio.samples.is_empty() || window_frames.is_zero() {
         return Vec::new();
     }
 
-    let sample_rate = audio.sample_rate;
-    let window_size = ((window_ms / 1000.0) * sample_rate as f64).max(1.0) as usize;
-    let min_silence_samples =
-        ((min_silence_ms / 1000.0) * sample_rate as f64).max(window_size as f64) as usize;
+    let window_size = window_frames.as_usize().max(1);
+    let min_silence_samples = min_silence_frames.as_usize().max(window_size);
 
     let mut window_energies = Vec::new();
     let mut idx = 0;
@@ -30,6 +47,16 @@ pub fn detect_pauses(
         let energy = window_energy(&audio.samples[idx..end]);
         window_energies.push((idx, energy));
         idx += window_size;
+    }
+
+    let (min_energy, max_energy) = window_energies
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(min_e, max_e), (_, energy)| {
+            (min_e.min(*energy), max_e.max(*energy))
+        });
+    if (max_energy - min_energy).abs() <= f32::EPSILON {
+        // Flat energy profile: no pauses.
+        return Vec::new();
     }
 
     let mut pauses = Vec::new();
@@ -42,7 +69,7 @@ pub fn detect_pauses(
             let silence_len = start_idx.saturating_sub(start);
             if silence_len >= min_silence_samples {
                 let midpoint = start + silence_len / 2;
-                pauses.push(midpoint as f64 / sample_rate as f64);
+                pauses.push(FrameIndex::from(midpoint));
             }
             silence_start = None;
         }
@@ -52,14 +79,13 @@ pub fn detect_pauses(
         let silence_len = audio.samples.len().saturating_sub(start);
         if silence_len >= min_silence_samples {
             let midpoint = start + silence_len / 2;
-            pauses.push(midpoint as f64 / sample_rate as f64);
+            pauses.push(FrameIndex::from(midpoint));
         }
     }
 
     pauses
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn window_energy(window: &[f32]) -> f32 {
     if window.is_empty() {
         return 0.0;
@@ -71,9 +97,12 @@ fn window_energy(window: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{FrameRange, SampleRate};
 
     fn make_audio(samples: Vec<f32>, sample_rate: u32) -> AudioData {
+        let length = FrameCount::from(samples.len());
         AudioData {
+            frame_range: FrameRange::new(FrameIndex::ZERO, length),
             samples,
             sample_rate,
         }
@@ -81,8 +110,16 @@ mod tests {
 
     #[test]
     fn detect_no_pauses_in_loud_signal() {
-        let audio = make_audio(vec![0.8; 10_000], 10_000); // 1 second loud
-        let pauses = detect_pauses(&audio, 20.0, 80.0, 0.2);
+        let sample_rate = SampleRate::new(10_000).unwrap();
+        let audio = make_audio(vec![0.8; 10_000], sample_rate.hz()); // 1 second loud
+        let window = sample_rate.frames_from_seconds_round(0.02);
+        let threshold = calibrate_threshold(&audio, window);
+        let pauses = detect_pauses_frames(
+            &audio,
+            window,
+            sample_rate.frames_from_seconds_round(0.08),
+            threshold,
+        );
         assert!(pauses.is_empty());
     }
 
@@ -92,11 +129,19 @@ mod tests {
         let mut samples = vec![0.8; 5_000];
         samples.extend(vec![0.01; 2_000]);
         samples.extend(vec![0.8; 5_000]);
-        let audio = make_audio(samples, 10_000);
+        let sample_rate = SampleRate::new(10_000).unwrap();
+        let audio = make_audio(samples, sample_rate.hz());
 
-        let pauses = detect_pauses(&audio, 20.0, 80.0, 0.05);
+        let window = sample_rate.frames_from_seconds_round(0.02);
+        let threshold = calibrate_threshold(&audio, window);
+        let pauses = detect_pauses_frames(
+            &audio,
+            window,
+            sample_rate.frames_from_seconds_round(0.08),
+            threshold,
+        );
         assert_eq!(pauses.len(), 1);
-        let pause_time = pauses[0];
+        let pause_time = sample_rate.seconds_from_frames(pauses[0].to_count());
         assert!((pause_time - 0.6).abs() < 0.05); // roughly middle of quiet region
     }
 
@@ -106,9 +151,17 @@ mod tests {
         let mut samples = vec![0.8; 5_000];
         samples.extend(vec![0.01; 400]);
         samples.extend(vec![0.8; 5_000]);
-        let audio = make_audio(samples, 10_000);
+        let sample_rate = SampleRate::new(10_000).unwrap();
+        let audio = make_audio(samples, sample_rate.hz());
 
-        let pauses = detect_pauses(&audio, 20.0, 80.0, 0.05);
+        let window = sample_rate.frames_from_seconds_round(0.02);
+        let threshold = calibrate_threshold(&audio, window);
+        let pauses = detect_pauses_frames(
+            &audio,
+            window,
+            sample_rate.frames_from_seconds_round(0.08),
+            threshold,
+        );
         assert!(pauses.is_empty());
     }
 }

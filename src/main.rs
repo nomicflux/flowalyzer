@@ -290,7 +290,15 @@ fn plan_chunks(
     target_duration: f64,
 ) -> Vec<types::ChunkBoundary> {
     println!("\n3. Calculating linguistic chunk boundaries...");
-    let config = types::ChunkConfig::new(target_duration);
+    let sample_rate = types::SampleRate::new(audio.sample_rate)
+        .expect("sample rate must be positive for chunk planning");
+    let target_frames = sample_rate.frames_from_seconds_round(target_duration);
+    assert!(
+        !target_frames.is_zero(),
+        "target duration must produce at least one frame"
+    );
+    let config =
+        types::ChunkConfig::new_frames(target_frames, target_frames, types::FrameCount::ZERO);
     let pauses = detect_pauses_for_chunking(audio, target_duration);
     let pause_count = pauses.len();
     println!(
@@ -298,7 +306,7 @@ fn plan_chunks(
         pause_count,
         if pause_count == 1 { "" } else { "s" }
     );
-    let boundaries = chunking::calculate_chunk_boundaries(transcript, config, &pauses);
+    let boundaries = chunking::calculate_chunk_boundaries(transcript, config, &pauses, sample_rate);
     println!("   Created {} chunks at natural breaks", boundaries.len());
     if !boundaries.is_empty() {
         let total_segments: usize = boundaries
@@ -316,13 +324,25 @@ fn plan_chunks(
 fn detect_pauses_for_chunking(audio: &types::AudioData, target_duration: f64) -> Vec<f64> {
     let min_silence_duration = (target_duration * 0.2).clamp(0.15, 0.6);
     let window_duration = 0.05;
-    let silence_threshold = 0.04;
-    audio::pause_detector::detect_pauses(
+    let sample_rate = types::SampleRate::new(audio.sample_rate)
+        .expect("sample rate must be positive for pause detection");
+    let window_frames = sample_rate.frames_from_seconds_round(window_duration);
+    let min_silence_frames = sample_rate.frames_from_seconds_round(min_silence_duration);
+    assert!(
+        !window_frames.is_zero() && !min_silence_frames.is_zero(),
+        "pause detection windows must be at least one frame"
+    );
+    let threshold = audio::pause_detector::calibrate_threshold(audio, window_frames);
+    let pauses = audio::pause_detector::detect_pauses_frames(
         audio,
-        min_silence_duration,
-        silence_threshold,
-        window_duration,
-    )
+        window_frames,
+        min_silence_frames,
+        threshold,
+    );
+    pauses
+        .into_iter()
+        .map(|idx| sample_rate.seconds_from_frames(idx.to_count()))
+        .collect()
 }
 fn slice_chunks(
     audio: &types::AudioData,
@@ -499,9 +519,11 @@ fn trim_audio_segment(
 
     let samples = audio.samples[start_index..end_index].to_vec();
 
+    let length = types::FrameCount::from(samples.len());
     types::AudioData {
         samples,
         sample_rate,
+        frame_range: types::FrameRange::new(types::FrameIndex::ZERO, length),
     }
 }
 

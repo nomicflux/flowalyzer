@@ -10,7 +10,7 @@ use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use tracing::info;
 
 use crate::audio::resample;
-use crate::types::AudioData;
+use crate::types::{AudioData, FrameCount, FrameIndex, FrameRange};
 
 const DEFAULT_SAMPLE_RATE: u32 = 16_000;
 
@@ -48,11 +48,29 @@ struct StreamSetup {
     sample_rate: u32,
 }
 
+pub trait CaptureSource: 'static {
+    fn sample_rate(&self) -> u32;
+    fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>>;
+    fn stop(&mut self);
+}
+
 pub struct LiveCapture {
     stream: Stream,
     receiver: Receiver<Vec<f32>>,
     finished: Arc<AtomicBool>,
     sample_rate: u32,
+}
+
+pub trait CaptureBuilder: Send + Sync {
+    fn start_capture(&self, config: &CaptureConfig) -> Result<Box<dyn CaptureSource>>;
+}
+
+pub struct LiveCaptureBuilder;
+
+impl CaptureBuilder for LiveCaptureBuilder {
+    fn start_capture(&self, config: &CaptureConfig) -> Result<Box<dyn CaptureSource>> {
+        LiveCapture::start(config).map(|capture| Box::new(capture) as Box<dyn CaptureSource>)
+    }
 }
 
 pub fn record_audio(config: &CaptureConfig, duration: Duration) -> Result<AudioData> {
@@ -71,9 +89,11 @@ pub fn record_audio(config: &CaptureConfig, duration: Duration) -> Result<AudioD
     } else {
         resample::linear_resample(&raw, setup.sample_rate, config.sample_rate)?
     };
+    let length = FrameCount::from(mono.len());
     Ok(AudioData {
         samples: mono,
         sample_rate: config.sample_rate,
+        frame_range: FrameRange::new(FrameIndex::ZERO, length),
     })
 }
 
@@ -123,10 +143,14 @@ fn bail_device(name: &str) -> Result<Device> {
     Err(anyhow!("input device '{}' not found", name))
 }
 
-fn build_stream(device: &Device, _config: &CaptureConfig) -> Result<StreamSetup> {
-    let supported = device
-        .default_input_config()
-        .context("failed to query default input config")?;
+fn build_stream(device: &Device, config: &CaptureConfig) -> Result<StreamSetup> {
+    let supported = select_supported_config(device, config.sample_rate).with_context(|| {
+        format!(
+            "device {:?} does not support sample rate {} Hz",
+            device.name().ok(),
+            config.sample_rate
+        )
+    })?;
     let stream_config = supported.config();
     info!(
         device_name = ?device.name().ok(),
@@ -200,6 +224,25 @@ fn build_input_stream(
     .context("failed to build input stream")
 }
 
+impl CaptureSource for LiveCapture {
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(chunk) => Some(chunk),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => None,
+        }
+    }
+
+    fn stop(&mut self) {
+        self.finished.store(true, Ordering::SeqCst);
+        let _ = self.stream.pause();
+    }
+}
+
 impl LiveCapture {
     pub fn start(config: &CaptureConfig) -> Result<Self> {
         let setup = start_streaming_capture(config)?;
@@ -210,8 +253,39 @@ impl LiveCapture {
             sample_rate: setup.sample_rate,
         })
     }
+}
 
-    pub fn recv_chunk(&self, timeout: Duration) -> Option<Vec<f32>> {
+impl Drop for LiveCapture {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub struct StaticCapture {
+    receiver: Receiver<Vec<f32>>,
+    sample_rate: u32,
+    finished: bool,
+}
+
+impl StaticCapture {
+    pub fn from_receiver(receiver: Receiver<Vec<f32>>, sample_rate: u32) -> Self {
+        Self {
+            receiver,
+            sample_rate,
+            finished: false,
+        }
+    }
+}
+
+impl CaptureSource for StaticCapture {
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    fn recv_chunk(&mut self, timeout: Duration) -> Option<Vec<f32>> {
+        if self.finished {
+            return None;
+        }
         match self.receiver.recv_timeout(timeout) {
             Ok(chunk) => Some(chunk),
             Err(RecvTimeoutError::Timeout) => None,
@@ -219,19 +293,8 @@ impl LiveCapture {
         }
     }
 
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn stop(&self) {
-        self.finished.store(true, Ordering::SeqCst);
-        let _ = self.stream.pause();
-    }
-}
-
-impl Drop for LiveCapture {
-    fn drop(&mut self) {
-        self.stop();
+    fn stop(&mut self) {
+        self.finished = true;
     }
 }
 
@@ -357,6 +420,26 @@ pub fn mix_to_mono(frame: &[f32]) -> f32 {
         return 0.0;
     }
     frame.iter().sum::<f32>() / frame.len() as f32
+}
+
+fn select_supported_config(
+    device: &Device,
+    target_sample_rate: u32,
+) -> Result<cpal::SupportedStreamConfig> {
+    let mut configs = device
+        .supported_input_configs()
+        .context("failed to query supported input configs")?;
+    configs
+        .find_map(|range| {
+            let min = range.min_sample_rate().0;
+            let max = range.max_sample_rate().0;
+            if (min..=max).contains(&target_sample_rate) {
+                Some(range.with_sample_rate(cpal::SampleRate(target_sample_rate)))
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| anyhow!("no supported config for {} Hz", target_sample_rate))
 }
 
 #[cfg(test)]
