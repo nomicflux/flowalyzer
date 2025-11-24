@@ -13,6 +13,7 @@ use crate::pronunciation::session::{
     RecipeApplicationStage, SessionConfig, SessionEngine, SessionSnapshot,
 };
 use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
+use crate::pronunciation::features::FeatureConfig;
 use crate::types::Recipe;
 use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
 
@@ -46,6 +47,8 @@ pub struct SessionRuntime {
     snapshot_sender: Sender<SessionSnapshot>,
     command_receiver: Receiver<SessionCommand>,
     capture_buffer: Arc<Mutex<Vec<f32>>>,
+    resampled_buffer: Arc<Mutex<Vec<f32>>>,
+    tail_seeded: Arc<AtomicBool>,
     capture_builder: Arc<dyn CaptureBuilder>,
 }
 
@@ -82,6 +85,8 @@ impl SessionRuntime {
             snapshot_sender: snapshot_tx,
             command_receiver: command_rx,
             capture_buffer: Arc::new(Mutex::new(Vec::new())),
+            resampled_buffer: Arc::new(Mutex::new(Vec::new())),
+            tail_seeded: Arc::new(AtomicBool::new(false)),
             capture_builder,
         };
         let handle = SessionHandle {
@@ -106,6 +111,8 @@ impl SessionRuntime {
                         active.stop();
                     }
                     Self::clear_buffer(&self.capture_buffer);
+                    Self::clear_buffer(&self.resampled_buffer);
+                    self.tail_seeded.store(false, Ordering::SeqCst);
                     match self.start_capture() {
                         Ok(new_capture) => {
                             capture = Some(new_capture);
@@ -132,6 +139,8 @@ impl SessionRuntime {
                         active.stop();
                     }
                     Self::clear_buffer(&self.capture_buffer);
+                    Self::clear_buffer(&self.resampled_buffer);
+                    self.tail_seeded.store(false, Ordering::SeqCst);
                     if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
                         let _ = self.snapshot_sender.send(snapshot);
                     }
@@ -199,23 +208,49 @@ impl SessionRuntime {
             ) {
                 Ok(Some((processed, remaining))) => {
                     *buffer = remaining;
-                    if let Ok(mut engine) = self.engine.lock() {
-                        let report = engine.process_chunk(&processed);
-                        if let Ok(mut last) = self.last_alignment.lock() {
-                            *last = Some(report.clone());
+                    let mut staging = self.resampled_buffer.lock().unwrap();
+                    staging.extend_from_slice(&processed);
+                    let required_tail_len = self.required_tail_len();
+                    while staging.len()
+                        >= if self.tail_seeded.load(Ordering::SeqCst) {
+                            target_len
+                        } else {
+                            required_tail_len + target_len
                         }
-                        let snapshot = self.snapshot_for(report, true);
-                        let _ = self.snapshot_sender.send(snapshot);
+                    {
+                        if !self.tail_seeded.load(Ordering::SeqCst) {
+                            let tail = staging[..required_tail_len].to_vec();
+                            let chunk = staging[required_tail_len..required_tail_len + target_len]
+                                .to_vec();
+                            *staging = staging[required_tail_len + target_len..].to_vec();
+                            if let Ok(mut engine) = self.engine.lock() {
+                                engine.seed_tail(&tail);
+                                let report = engine.process_chunk(&chunk);
+                                if let Ok(mut last) = self.last_alignment.lock() {
+                                    *last = Some(report.clone());
+                                }
+                                let snapshot = self.snapshot_for(report, true);
+                                let _ = self.snapshot_sender.send(snapshot);
+                            }
+                            self.tail_seeded.store(true, Ordering::SeqCst);
+                        } else {
+                            let chunk = staging[..target_len].to_vec();
+                            *staging = staging[target_len..].to_vec();
+                            if let Ok(mut engine) = self.engine.lock() {
+                                let report = engine.process_chunk(&chunk);
+                                if let Ok(mut last) = self.last_alignment.lock() {
+                                    *last = Some(report.clone());
+                                }
+                                let snapshot = self.snapshot_for(report, true);
+                                let _ = self.snapshot_sender.send(snapshot);
+                            }
+                        }
                     }
                 }
                 Ok(None) => break,
                 Err(err) => {
                     buffer.clear();
-                    if let Some(snapshot) =
-                        self.snapshot_from_last(false, None, Some(err.to_string()))
-                    {
-                        let _ = self.snapshot_sender.send(snapshot);
-                    }
+                    let _ = err;
                     break;
                 }
             }
@@ -250,6 +285,11 @@ impl SessionRuntime {
             recipe_state,
             error,
         ))
+    }
+
+    fn required_tail_len(&self) -> usize {
+        let cfg = FeatureConfig::from_sample_rate(self.config.sample_rate);
+        cfg.frame_len_samples - cfg.hop_samples
     }
 
     fn snapshot_internal(
@@ -597,15 +637,17 @@ impl SessionController {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::f32::consts::PI;
+    #[cfg(test)]
+    mod tests {
+        use std::f32::consts::PI;
 
-    use crate::pronunciation::session::{SessionConfig, SessionEngine};
+        use crate::audio::resample::linear_resample;
+        use crate::pronunciation::features::FeatureConfig;
+        use crate::pronunciation::session::{SessionConfig, SessionEngine};
 
-    use super::{
-        collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
-    };
+        use super::{
+            collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
+        };
 
     #[test]
     fn required_samples_scale_with_input_rate() {
@@ -686,6 +728,8 @@ mod tests {
             chunk_duration_ms: 150,
             ..Default::default()
         };
+        let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
+        let required_tail_len = feature_cfg.frame_len_samples - feature_cfg.hop_samples;
         let reference = sine_wave(config.sample_rate, 220.0, 2.0);
         let mut engine = SessionEngine::new(&reference, &config);
 
@@ -694,9 +738,17 @@ mod tests {
         let device_chunk = 480; // ~10ms at 48kHz
         let target_len = (config.sample_rate as usize * config.chunk_duration_ms as usize) / 1_000;
 
+        let raw_tail_len =
+            ((required_tail_len as f32 * device_rate as f32 / config.sample_rate as f32).ceil())
+                as usize;
+        let raw_tail = &capture_signal[..raw_tail_len];
+        let resampled_tail = linear_resample(raw_tail, device_rate, config.sample_rate).unwrap();
+        let tail_for_engine = &resampled_tail[..required_tail_len];
+        engine.seed_tail(tail_for_engine);
+
         let mut device_buffer = Vec::new();
         let mut emitted_voiced_frames = 0usize;
-        let mut index = 0;
+        let mut index = raw_tail_len;
         while index < capture_signal.len() {
             let end = (index + device_chunk).min(capture_signal.len());
             device_buffer.extend_from_slice(&capture_signal[index..end]);

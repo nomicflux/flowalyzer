@@ -90,18 +90,13 @@ impl FeatureExtractor {
         let frame_len = cfg.frame_len_samples;
         let hop = cfg.hop_samples;
         let tail_len = prev_tail.len() as isize;
-        let mut start = 0usize;
-        loop {
+        for start in (0..=window.len().saturating_sub(frame_len)).step_by(hop) {
             let frame = &window[start..start + frame_len];
             let chunk_start = start as isize - (tail_len - hop as isize);
             if chunk_start >= 0 {
                 frame_starts.push(chunk_start as usize);
                 energy.push(frame_energy(frame));
                 pitch.push(frame_pitch(frame, sample_rate));
-            }
-            start += hop;
-            if start + frame_len > window.len() {
-                break;
             }
         }
 
