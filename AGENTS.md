@@ -22,7 +22,11 @@
 - Run `cargo clippy --all` until there are no warnings. Dead code is not acceptable.
 
 ## Commit & Pull Request Guidelines
-Commits follow short, imperative statements (`clip playback simplified`). Keep related code and asset updates together, and reference issues with `Refs #NN` when applicable. Pull requests should include: 1) a concise summary, 2) reproduction steps or `cargo run` flags used to verify the UI, 3) screenshots or gifs when UI panels change, and 4) notes on performance or audio latency impacts. Tag reviewers by subsystem (`audio`, `ui`, `inference`) so work can be triaged quickly.
+- Commits follow short, imperative statements (`clip playback simplified`). Keep related code and asset updates together, and reference issues with `Refs #NN` when applicable. Pull requests should include: 1) a concise summary, 2) reproduction steps or `cargo run` flags used to verify the UI, 3) screenshots or gifs when UI panels change, and 4) notes on performance or audio latency impacts. Tag reviewers by subsystem (`audio`, `ui`, `inference`) so work can be triaged quickly.
+
+## Git History
+- NEVER for ANY reason run `git checkout`, `git restore`, or `git reset`. You do not understand the git worktree for the
+  project. You MUST undo changes manually.
 
 ## Agent Workflow Tips
 - When multiple agents collaborate, announce ownership of files in the PR thread, push small increments, and leave TODO comments prefixed with `AGENT:` plus your initials to avoid collisions. Reset model caches (`assets/tmp`) between runs so results stay deterministic for the next contributor.
@@ -33,3 +37,10 @@ Commits follow short, imperative statements (`clip playback simplified`). Keep r
 - Refer to `docs/LESSONS_LEARNED.md` for lessons agents have learned in the past in order to do better work. When making
   mistakes that cause the user to intensely reject your work, ask the user about the core principles violated and add a
   new lesson to `docs/LESSONS_LEARNED.md`.
+- ALWAYS ask before deleting files, and explain your reasoning.
+- You will be given an initial scope. All subsequent requests must fit within the rubric given by the scope. If you are
+  unclear on whether an action fits in the prompt's scope, after searching the code and previously given instructions,
+  then ask the user a clarifying question.
+- If you feel ANY need to go outside the prompt scope for ANY reason, you must ask the user for permission.
+- Plans are not suggestions. Plans are hard guidelines. If you think that rules contradict each other, ask for
+  clarification, but you CANNOT ignore plan directions.
