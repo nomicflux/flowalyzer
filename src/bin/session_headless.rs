@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use flowalyzer::pronunciation::features::{FeatureConfig, FeatureExtractor};
 use flowalyzer::pronunciation::session::{SessionConfig, SessionEngine};
 use flowalyzer::pronunciation::{load_clip, RecordedClip};
 
@@ -44,7 +45,11 @@ fn main() -> Result<()> {
         capture_sample_rate: args.capture_sample_rate,
         ..SessionConfig::default()
     };
-    let mut engine = SessionEngine::new(&reference.samples, &config);
+    let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
+    let extractor = FeatureExtractor::new();
+    let reference_features =
+        extractor.extract_reference(&reference.samples, config.sample_rate, feature_cfg);
+    let mut engine = SessionEngine::new(reference_features, config.sample_rate);
 
     println!(
         "Reference duration: {:.2}s | Learner duration: {:.2}s | chunk={} samples",

@@ -8,12 +8,12 @@ use std::time::Duration;
 use crate::audio::capture::{CaptureBuilder, CaptureConfig, CaptureSource, LiveCaptureBuilder};
 use crate::audio::playback::duplicate_to_stereo;
 use crate::audio::resample::linear_resample;
+use crate::pronunciation::features::{FeatureConfig, FeatureExtractor};
 use crate::pronunciation::session::{
     AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
     RecipeApplicationStage, SessionConfig, SessionEngine, SessionSnapshot,
 };
 use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
-use crate::pronunciation::features::FeatureConfig;
 use crate::types::Recipe;
 use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
 
@@ -53,6 +53,14 @@ pub struct SessionRuntime {
 }
 
 impl SessionRuntime {
+    fn create_engine(reference_samples: &[f32], sample_rate: u32) -> SessionEngine {
+        let feature_cfg = FeatureConfig::from_sample_rate(sample_rate);
+        let extractor = FeatureExtractor::new();
+        let reference_features =
+            extractor.extract_reference(reference_samples, sample_rate, feature_cfg);
+        SessionEngine::new(reference_features, sample_rate)
+    }
+
     pub fn spawn(
         reference_clip: RecordedClip,
         config: SessionConfig,
@@ -72,7 +80,7 @@ impl SessionRuntime {
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let reference_clip = Arc::new(reference_clip);
-        let engine = SessionEngine::new(&reference_clip.samples, &config);
+        let engine = Self::create_engine(&reference_clip.samples, config.sample_rate);
         let runtime = Self {
             reference_clip: reference_clip.clone(),
             flowalyzed_clip: Arc::new(Mutex::new(None)),
@@ -220,8 +228,8 @@ impl SessionRuntime {
                     {
                         if !self.tail_seeded.load(Ordering::SeqCst) {
                             let tail = staging[..required_tail_len].to_vec();
-                            let chunk = staging[required_tail_len..required_tail_len + target_len]
-                                .to_vec();
+                            let chunk =
+                                staging[required_tail_len..required_tail_len + target_len].to_vec();
                             *staging = staging[required_tail_len + target_len..].to_vec();
                             if let Ok(mut engine) = self.engine.lock() {
                                 engine.seed_tail(&tail);
@@ -439,7 +447,7 @@ impl SessionRuntime {
                 let config = self.config.clone();
                 std::thread::spawn(move || {
                     if let Ok(mut engine) = engine.lock() {
-                        *engine = SessionEngine::new(&clip.samples, &config);
+                        *engine = SessionRuntime::create_engine(&clip.samples, config.sample_rate);
                     }
                 });
                 if let Ok(mut active) = self.active_variant.lock() {
@@ -637,17 +645,18 @@ impl SessionController {
     }
 }
 
-    #[cfg(test)]
-    mod tests {
-        use std::f32::consts::PI;
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::PI;
 
-        use crate::audio::resample::linear_resample;
-        use crate::pronunciation::features::FeatureConfig;
-        use crate::pronunciation::session::{SessionConfig, SessionEngine};
+    use crate::audio::resample::linear_resample;
+    use crate::pronunciation::features::FeatureConfig;
+    use crate::pronunciation::session::SessionConfig;
 
-        use super::{
-            collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
-        };
+    use super::{
+        collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
+        SessionRuntime,
+    };
 
     #[test]
     fn required_samples_scale_with_input_rate() {
@@ -731,16 +740,16 @@ impl SessionController {
         let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
         let required_tail_len = feature_cfg.frame_len_samples - feature_cfg.hop_samples;
         let reference = sine_wave(config.sample_rate, 220.0, 2.0);
-        let mut engine = SessionEngine::new(&reference, &config);
+        let mut engine = SessionRuntime::create_engine(&reference, config.sample_rate);
 
         let device_rate = 48_000;
         let capture_signal = sine_wave(device_rate, 220.0, 2.0);
         let device_chunk = 480; // ~10ms at 48kHz
         let target_len = (config.sample_rate as usize * config.chunk_duration_ms as usize) / 1_000;
 
-        let raw_tail_len =
-            ((required_tail_len as f32 * device_rate as f32 / config.sample_rate as f32).ceil())
-                as usize;
+        let raw_tail_len = ((required_tail_len as f32 * device_rate as f32
+            / config.sample_rate as f32)
+            .ceil()) as usize;
         let raw_tail = &capture_signal[..raw_tail_len];
         let resampled_tail = linear_resample(raw_tail, device_rate, config.sample_rate).unwrap();
         let tail_for_engine = &resampled_tail[..required_tail_len];

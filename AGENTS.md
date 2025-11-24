@@ -20,6 +20,8 @@
 - Add unit tests for every pure function, and add integrations tests when the tests accurately test the application flow (no complicated test harnesses - prefer manual testing.)
 - Run `cargo test --all` until there are no test failures, even if they are in not in code that you touched
 - Run `cargo clippy --all` until there are no warnings. Dead code is not acceptable.
+- Test & clippy commands must be run after EVERY completed unit of work. Do not say "Tests not requested." If you
+  touched code, you run tests and clippy.
 
 ## Commit & Pull Request Guidelines
 - Commits follow short, imperative statements (`clip playback simplified`). Keep related code and asset updates together, and reference issues with `Refs #NN` when applicable. Pull requests should include: 1) a concise summary, 2) reproduction steps or `cargo run` flags used to verify the UI, 3) screenshots or gifs when UI panels change, and 4) notes on performance or audio latency impacts. Tag reviewers by subsystem (`audio`, `ui`, `inference`) so work can be triaged quickly.

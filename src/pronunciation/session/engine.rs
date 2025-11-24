@@ -2,8 +2,6 @@ use crate::pronunciation::alignment::align_features;
 use crate::pronunciation::features::{FeatureConfig, FeatureExtractor, ReferenceFeatures};
 use crate::pronunciation::session::AlignmentReport;
 
-use super::SessionConfig;
-
 pub struct SessionEngine {
     reference_features: ReferenceFeatures,
     tail: Vec<f32>,
@@ -14,25 +12,24 @@ pub struct SessionEngine {
 }
 
 impl SessionEngine {
-    pub fn new(reference_samples: &[f32], config: &SessionConfig) -> Self {
-        let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
+    pub fn new(reference_features: ReferenceFeatures, sample_rate: u32) -> Self {
+        let feature_cfg = FeatureConfig::from_sample_rate(sample_rate);
         let extractor = FeatureExtractor::new();
-        let reference_features =
-            extractor.extract_reference(reference_samples, config.sample_rate, feature_cfg);
         Self {
             reference_features,
             tail: Vec::new(),
             global_sample_counter: 0,
-            sample_rate: config.sample_rate,
+            sample_rate,
             feature_cfg,
             extractor,
         }
     }
 
-    pub fn seed_tail(&mut self, tail: &[f32]) {
-        self.tail.clear();
-        self.tail.extend_from_slice(tail);
-        self.global_sample_counter = self.tail.len() as u64;
+    pub fn seed_tail(&mut self, samples: &[f32]) {
+        let required_tail_len = self.feature_cfg.frame_len_samples - self.feature_cfg.hop_samples;
+        let start = samples.len() - required_tail_len;
+        self.tail = samples[start..].to_vec();
+        self.global_sample_counter = samples.len() as u64;
     }
 
     pub fn process_chunk(&mut self, learner_samples: &[f32]) -> AlignmentReport {
@@ -58,7 +55,7 @@ impl SessionEngine {
             self.sample_rate,
             self.feature_cfg.hop_samples,
         );
-        self.tail = window[window.len().saturating_sub(required_tail_len)..].to_vec();
+        self.tail = window[window.len() - required_tail_len..].to_vec();
         self.global_sample_counter += learner_samples.len() as u64;
         report
     }
@@ -78,5 +75,15 @@ impl SessionEngine {
 
     fn global_offset_ms(&self) -> f32 {
         (self.global_sample_counter as f32 / self.sample_rate as f32) * 1_000.0
+    }
+}
+
+impl SessionEngine {
+    pub fn tail_samples(&self) -> &[f32] {
+        &self.tail
+    }
+
+    pub fn global_sample_counter(&self) -> u64 {
+        self.global_sample_counter
     }
 }
