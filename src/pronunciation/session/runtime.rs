@@ -41,6 +41,7 @@ pub struct SessionRuntime {
     reference_playing: Arc<AtomicBool>,
     playback_state: Arc<Mutex<Option<PlaybackState>>>,
     engine: Arc<Mutex<SessionEngine>>,
+    last_alignment: Arc<Mutex<Option<AlignmentReport>>>,
     config: SessionConfig,
     snapshot_sender: Sender<SessionSnapshot>,
     command_receiver: Receiver<SessionCommand>,
@@ -76,6 +77,7 @@ impl SessionRuntime {
             reference_playing: Arc::new(AtomicBool::new(false)),
             playback_state: Arc::new(Mutex::new(None)),
             engine: Arc::new(Mutex::new(engine)),
+            last_alignment: Arc::new(Mutex::new(None)),
             config: config.clone(),
             snapshot_sender: snapshot_tx,
             command_receiver: command_rx,
@@ -89,7 +91,6 @@ impl SessionRuntime {
         let controller = SessionController {
             command_sender: command_tx,
         };
-        runtime.snapshot_sender.send(runtime.build_snapshot()).ok();
         thread::spawn(move || runtime.run());
         (handle, controller)
     }
@@ -111,13 +112,18 @@ impl SessionRuntime {
                         }
                         Err(err) => {
                             recording = false;
-                            let mut snapshot = self.build_snapshot();
-                            snapshot.error = Some(err.to_string());
-                            let _ = self.snapshot_sender.send(snapshot);
+                            if let Some(snapshot) =
+                                self.snapshot_from_last(false, None, Some(err.to_string()))
+                            {
+                                let _ = self.snapshot_sender.send(snapshot);
+                            }
                         }
                     }
                     if let Ok(mut engine) = self.engine.lock() {
                         engine.reset();
+                    }
+                    if let Ok(mut last) = self.last_alignment.lock() {
+                        *last = None;
                     }
                 }
                 Ok(SessionCommand::Stop) => {
@@ -126,7 +132,9 @@ impl SessionRuntime {
                         active.stop();
                     }
                     Self::clear_buffer(&self.capture_buffer);
-                    let _ = self.snapshot_sender.send(self.build_snapshot());
+                    if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                        let _ = self.snapshot_sender.send(snapshot);
+                    }
                 }
                 Ok(SessionCommand::Shutdown) => {
                     if let Some(mut active) = capture.take() {
@@ -193,6 +201,9 @@ impl SessionRuntime {
                     *buffer = remaining;
                     if let Ok(mut engine) = self.engine.lock() {
                         let report = engine.process_chunk(&processed);
+                        if let Ok(mut last) = self.last_alignment.lock() {
+                            *last = Some(report.clone());
+                        }
                         let snapshot = self.snapshot_for(report, true);
                         let _ = self.snapshot_sender.send(snapshot);
                     }
@@ -200,23 +211,15 @@ impl SessionRuntime {
                 Ok(None) => break,
                 Err(err) => {
                     buffer.clear();
-                    let mut snapshot = self.build_snapshot();
-                    snapshot.error = Some(err.to_string());
-                    let _ = self.snapshot_sender.send(snapshot);
+                    if let Some(snapshot) =
+                        self.snapshot_from_last(false, None, Some(err.to_string()))
+                    {
+                        let _ = self.snapshot_sender.send(snapshot);
+                    }
                     break;
                 }
             }
         }
-    }
-
-    fn build_snapshot(&self) -> SessionSnapshot {
-        self.snapshot_internal(
-            AlignmentReport::default(),
-            PronunciationScores::default(),
-            false,
-            None,
-            None,
-        )
     }
 
     fn snapshot_for(&self, alignment: AlignmentReport, recording: bool) -> SessionSnapshot {
@@ -227,6 +230,26 @@ impl SessionRuntime {
             None,
             None,
         )
+    }
+
+    fn snapshot_from_last(
+        &self,
+        recording: bool,
+        recipe_state: Option<RecipeApplicationProgress>,
+        error: Option<String>,
+    ) -> Option<SessionSnapshot> {
+        let alignment = self
+            .last_alignment
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())?;
+        Some(self.snapshot_internal(
+            alignment,
+            PronunciationScores::default(),
+            recording,
+            recipe_state,
+            error,
+        ))
     }
 
     fn snapshot_internal(
@@ -266,7 +289,9 @@ impl SessionRuntime {
                 });
                 self.reference_playing.store(true, Ordering::SeqCst);
                 *self.playback_state.lock().unwrap() = Some(PlaybackState { sink: sink_arc });
-                let _ = self.snapshot_sender.send(self.build_snapshot());
+                if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                    let _ = self.snapshot_sender.send(snapshot);
+                }
             }
         }
     }
@@ -278,7 +303,9 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            let _ = self.snapshot_sender.send(self.build_snapshot());
+            if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                let _ = self.snapshot_sender.send(snapshot);
+            }
         }
     }
 
@@ -299,7 +326,9 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            let _ = self.snapshot_sender.send(self.build_snapshot());
+            if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                let _ = self.snapshot_sender.send(snapshot);
+            }
         }
     }
 
@@ -330,14 +359,9 @@ impl SessionRuntime {
         error: Option<String>,
     ) {
         let progress = self.recipe_progress(stage, completed_steps, total_steps);
-        let snapshot = self.snapshot_internal(
-            AlignmentReport::default(),
-            PronunciationScores::default(),
-            false,
-            Some(progress),
-            error,
-        );
-        let _ = self.snapshot_sender.send(snapshot);
+        if let Some(snapshot) = self.snapshot_from_last(false, Some(progress), error) {
+            let _ = self.snapshot_sender.send(snapshot);
+        }
     }
 
     fn recipe_progress(
@@ -381,12 +405,18 @@ impl SessionRuntime {
                 if let Ok(mut active) = self.active_variant.lock() {
                     *active = variant;
                 }
-                let _ = self.snapshot_sender.send(self.build_snapshot());
+                if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                    let _ = self.snapshot_sender.send(snapshot);
+                }
             }
             None => {
-                let mut snapshot = self.build_snapshot();
-                snapshot.error = Some("flowalyzed clip not available".to_string());
-                let _ = self.snapshot_sender.send(snapshot);
+                if let Some(snapshot) = self.snapshot_from_last(
+                    false,
+                    None,
+                    Some("flowalyzed clip not available".to_string()),
+                ) {
+                    let _ = self.snapshot_sender.send(snapshot);
+                }
             }
         }
     }
@@ -510,8 +540,8 @@ impl SessionHandle {
         &self.config
     }
 
-    pub fn initial_snapshot(&self) -> SessionSnapshot {
-        SessionSnapshot::default()
+    pub fn initial_snapshot(&self) -> Option<SessionSnapshot> {
+        self.snapshot_receiver.try_recv().ok()
     }
 }
 

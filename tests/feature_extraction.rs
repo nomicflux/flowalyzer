@@ -21,27 +21,6 @@ fn reference_frame_count_matches_expected_math() {
 }
 
 #[test]
-fn chunk_frames_anchor_to_chunk_start() {
-    let sample_rate = 16_000;
-    let cfg = FeatureConfig::from_sample_rate(sample_rate);
-    let tail_len = cfg.frame_len_samples - cfg.hop_samples;
-    let prev_tail: Vec<f32> = (0..tail_len)
-        .map(|i| (2.0 * PI * 220.0 * i as f32 / sample_rate as f32).sin())
-        .collect();
-    let chunk_len = cfg.frame_len_samples + cfg.hop_samples;
-    let chunk: Vec<f32> = (0..chunk_len)
-        .map(|i| (2.0 * PI * 330.0 * i as f32 / sample_rate as f32).sin())
-        .collect();
-
-    let extractor = FeatureExtractor::new();
-    let features = extractor.extract_chunk(&prev_tail, &chunk, sample_rate, cfg);
-
-    assert_eq!(features.frame_starts, vec![0, cfg.hop_samples]);
-    assert_eq!(features.energy.len(), features.frame_starts.len());
-    assert_eq!(features.pitch.len(), features.frame_starts.len());
-}
-
-#[test]
 fn repeated_extractions_are_deterministic() {
     let sample_rate = 16_000;
     let cfg = FeatureConfig::from_sample_rate(sample_rate);
@@ -59,30 +38,49 @@ fn repeated_extractions_are_deterministic() {
 }
 
 #[test]
-fn chunk_extraction_panics_on_invalid_inputs() {
+#[should_panic]
+fn reference_extraction_panics_when_too_short() {
     let sample_rate = 16_000;
     let cfg = FeatureConfig::from_sample_rate(sample_rate);
     let extractor = FeatureExtractor::new();
-    let chunk = vec![0.0; cfg.frame_len_samples];
-    let wrong_tail = vec![0.0; 1];
+    let samples = vec![0.0; cfg.frame_len_samples - 1];
 
-    assert!(std::panic::catch_unwind(|| {
-        extractor.extract_reference(&chunk, 0, cfg);
-    })
-    .is_err());
+    extractor.extract_reference(&samples, sample_rate, cfg);
+}
 
-    assert!(std::panic::catch_unwind(|| {
-        extractor.extract_chunk(&wrong_tail, &chunk, sample_rate, cfg);
-    })
-    .is_err());
+#[test]
+#[should_panic]
+fn chunk_extraction_panics_when_window_too_short() {
+    let sample_rate = 16_000;
+    let cfg = FeatureConfig::from_sample_rate(sample_rate);
+    let extractor = FeatureExtractor::new();
+    let tail = vec![0.0; cfg.frame_len_samples - cfg.hop_samples];
+    let chunk = vec![0.0; cfg.hop_samples - 1];
 
-    assert!(std::panic::catch_unwind(|| {
-        extractor.extract_chunk(
-            &vec![0.0; cfg.frame_len_samples - cfg.hop_samples],
-            &[],
-            sample_rate,
-            cfg,
-        );
-    })
-    .is_err());
+    extractor.extract_chunk(&tail, &chunk, sample_rate, cfg);
+}
+
+#[test]
+fn chunk_preserves_hop_phase_with_tail_contribution() {
+    let sample_rate = 16_000;
+    let cfg = FeatureConfig::from_sample_rate(sample_rate);
+    let tail_len = cfg.frame_len_samples - cfg.hop_samples;
+    let prev_tail: Vec<f32> = (0..tail_len)
+        .map(|i| (2.0 * PI * 220.0 * i as f32 / sample_rate as f32).sin())
+        .collect();
+    let chunk_len = cfg.hop_samples * 7;
+    let chunk: Vec<f32> = vec![0.0; chunk_len];
+
+    let extractor = FeatureExtractor::new();
+    let features = extractor.extract_chunk(&prev_tail, &chunk, sample_rate, cfg);
+
+    assert_eq!(features.frame_starts.first().copied(), Some(96));
+    assert!(features
+        .frame_starts
+        .windows(2)
+        .all(|window| window[1] - window[0] == cfg.hop_samples));
+    assert!(
+        features.energy.first().copied().unwrap_or(0.0) > 0.0,
+        "tail energy should contribute to first chunk frame"
+    );
 }

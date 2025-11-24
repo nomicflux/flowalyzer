@@ -1,23 +1,4 @@
-use flowalyzer::pronunciation::session::{
-    AlignmentReport, ClipVariant, RecipeApplicationStage, SessionSnapshot,
-};
-
-#[test]
-fn alignment_report_default_has_empty_vectors() {
-    let report = AlignmentReport::default();
-    assert!(report.reference_energy.is_empty());
-    assert!(report.learner_energy.is_empty());
-    assert_eq!(report.global_time_offset_ms, 0.0);
-    assert_eq!(report.confidence, 0.0);
-}
-
-#[test]
-fn session_snapshot_default_not_recording() {
-    let snapshot = SessionSnapshot::default();
-    assert!(!snapshot.recording);
-    assert!(!snapshot.reference_playing);
-    assert!(snapshot.error.is_none());
-}
+use flowalyzer::pronunciation::session::{ClipVariant, RecipeApplicationStage};
 
 #[test]
 fn clip_variant_equality() {

@@ -14,23 +14,6 @@ pub struct AlignmentReport {
     pub confidence: f32,
 }
 
-impl Default for AlignmentReport {
-    fn default() -> Self {
-        Self {
-            reference_energy: Vec::new(),
-            learner_energy: Vec::new(),
-            reference_pitch: Vec::new(),
-            learner_pitch: Vec::new(),
-            similarity_band: Vec::new(),
-            contour_band: Vec::new(),
-            phonemes: Vec::new(),
-            total_duration: Duration::ZERO,
-            global_time_offset_ms: 0.0,
-            confidence: 0.0,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct SessionSnapshot {
     pub alignment: AlignmentReport,
@@ -41,21 +24,6 @@ pub struct SessionSnapshot {
     pub has_flowalyzed_clip: bool,
     pub recipe_state: Option<RecipeApplicationProgress>,
     pub error: Option<String>,
-}
-
-impl Default for SessionSnapshot {
-    fn default() -> Self {
-        Self {
-            alignment: AlignmentReport::default(),
-            scores: PronunciationScores::default(),
-            recording: false,
-            reference_playing: false,
-            active_clip_variant: ClipVariant::Original,
-            has_flowalyzed_clip: false,
-            recipe_state: None,
-            error: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

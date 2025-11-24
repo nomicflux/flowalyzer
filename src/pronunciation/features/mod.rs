@@ -11,13 +11,8 @@ pub struct FeatureConfig {
 
 impl FeatureConfig {
     pub fn from_sample_rate(sample_rate: u32) -> Self {
-        assert!(sample_rate > 0, "sample rate must be positive");
         let frame_len_samples = scaled_samples(FRAME_LENGTH_SAMPLES_AT_16K, sample_rate);
         let hop_samples = scaled_samples(HOP_SAMPLES_AT_16K, sample_rate);
-        assert!(
-            frame_len_samples > hop_samples,
-            "frame length must exceed hop to allow overlap"
-        );
         Self {
             frame_len_samples,
             hop_samples,
@@ -25,21 +20,21 @@ impl FeatureConfig {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ReferenceFeatures {
     pub energy: Vec<f32>,
     pub pitch: Vec<f32>,
     pub frame_starts: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChunkFeatures {
     pub energy: Vec<f32>,
     pub pitch: Vec<f32>,
     pub frame_starts: Vec<usize>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct FeatureExtractor;
 
 impl FeatureExtractor {
@@ -53,22 +48,24 @@ impl FeatureExtractor {
         sample_rate: u32,
         cfg: FeatureConfig,
     ) -> ReferenceFeatures {
-        assert!(sample_rate > 0, "sample rate must be positive");
-        let starts = frame_starts(samples.len(), cfg.frame_len_samples, cfg.hop_samples, 0);
-        assert!(
-            !starts.is_empty(),
-            "insufficient samples ({}) for a single frame ({})",
-            samples.len(),
-            cfg.frame_len_samples
-        );
-        let energy = starts
-            .iter()
-            .map(|&start| frame_energy(samples, start, cfg.frame_len_samples))
-            .collect();
-        let pitch = starts
-            .iter()
-            .map(|&start| frame_pitch(samples, start, cfg.frame_len_samples, sample_rate))
-            .collect();
+        let mut starts = Vec::new();
+        let mut energy = Vec::new();
+        let mut pitch = Vec::new();
+        let frame_len = cfg.frame_len_samples;
+        let hop = cfg.hop_samples;
+        let frame = &samples[0..frame_len];
+        starts.push(0);
+        energy.push(frame_energy(frame));
+        pitch.push(frame_pitch(frame, sample_rate));
+        for start in (hop..samples.len()).step_by(hop) {
+            if start + frame_len > samples.len() {
+                break;
+            }
+            let frame = &samples[start..start + frame_len];
+            starts.push(start);
+            energy.push(frame_energy(frame));
+            pitch.push(frame_pitch(frame, sample_rate));
+        }
         ReferenceFeatures {
             energy,
             pitch,
@@ -83,47 +80,30 @@ impl FeatureExtractor {
         sample_rate: u32,
         cfg: FeatureConfig,
     ) -> ChunkFeatures {
-        assert!(sample_rate > 0, "sample rate must be positive");
-        assert!(!chunk.is_empty(), "chunk must not be empty");
-        let expected_tail = cfg
-            .frame_len_samples
-            .checked_sub(cfg.hop_samples)
-            .expect("frame length must exceed hop");
-        assert_eq!(
-            prev_tail.len(),
-            expected_tail,
-            "prev_tail must be frame_len - hop"
-        );
-
         let mut window = Vec::with_capacity(prev_tail.len() + chunk.len());
         window.extend_from_slice(prev_tail);
         window.extend_from_slice(chunk);
 
-        // Frames start every hop, and we only keep windows fully contained in the tail+chunk buffer.
-        let combined_starts = frame_starts(
-            window.len(),
-            cfg.frame_len_samples,
-            cfg.hop_samples,
-            prev_tail.len(),
-        );
-        assert!(
-            !combined_starts.is_empty(),
-            "insufficient samples for one frame (have {}, need {})",
-            window.len(),
-            cfg.frame_len_samples
-        );
-        let energy = combined_starts
-            .iter()
-            .map(|&start| frame_energy(&window, start, cfg.frame_len_samples))
-            .collect();
-        let pitch = combined_starts
-            .iter()
-            .map(|&start| frame_pitch(&window, start, cfg.frame_len_samples, sample_rate))
-            .collect();
-        let frame_starts: Vec<usize> = combined_starts
-            .into_iter()
-            .map(|start| start - prev_tail.len())
-            .collect();
+        let mut energy = Vec::new();
+        let mut pitch = Vec::new();
+        let mut frame_starts = Vec::new();
+        let frame_len = cfg.frame_len_samples;
+        let hop = cfg.hop_samples;
+        let tail_len = prev_tail.len() as isize;
+        let mut start = 0usize;
+        loop {
+            let frame = &window[start..start + frame_len];
+            let chunk_start = start as isize - (tail_len - hop as isize);
+            if chunk_start >= 0 {
+                frame_starts.push(chunk_start as usize);
+                energy.push(frame_energy(frame));
+                pitch.push(frame_pitch(frame, sample_rate));
+            }
+            start += hop;
+            if start + frame_len > window.len() {
+                break;
+            }
+        }
 
         ChunkFeatures {
             energy,
@@ -133,39 +113,23 @@ impl FeatureExtractor {
     }
 }
 
-fn scaled_samples(base_at_16k: usize, sample_rate: u32) -> usize {
-    (((base_at_16k as u64) * sample_rate as u64) / 16_000).max(1) as usize
-}
-
-fn frame_starts(total_len: usize, frame_len: usize, hop: usize, first_start: usize) -> Vec<usize> {
-    let mut starts = Vec::new();
-    let mut start = first_start;
-    // Frame i starts at start_i = first_start + i * hop; require start_i + frame_len <= total_len.
-    while start + frame_len <= total_len {
-        starts.push(start);
-        start += hop;
+impl Default for FeatureExtractor {
+    fn default() -> Self {
+        Self::new()
     }
-    starts
 }
 
-fn frame_energy(samples: &[f32], start: usize, frame_len: usize) -> f32 {
-    let frame = &samples[start..start + frame_len];
-    let sum_squares: f32 = frame.iter().map(|value| value * value).sum();
-    (sum_squares / frame_len as f32).sqrt()
+fn scaled_samples(base_at_16k: usize, sample_rate: u32) -> usize {
+    ((base_at_16k as u64) * sample_rate as u64 / 16_000) as usize
 }
 
-fn frame_pitch(samples: &[f32], start: usize, frame_len: usize, sample_rate: u32) -> f32 {
-    let frame = &samples[start..start + frame_len];
+fn frame_energy(frame: &[f32]) -> f32 {
+    frame.iter().map(|value| value * value).sum()
+}
+
+fn frame_pitch(frame: &[f32], sample_rate: u32) -> f32 {
     let min_period = (sample_rate as f32 / MAX_FREQUENCY_HZ) as usize;
     let max_period = (sample_rate as f32 / MIN_FREQUENCY_HZ) as usize;
-    assert!(min_period > 0, "sample rate too low for pitch extraction");
-    assert!(
-        min_period < frame_len,
-        "frame too short for minimum period ({} vs frame {})",
-        min_period,
-        frame_len
-    );
-    let max_period = max_period.min(frame_len - 1).max(min_period);
     let mut best_lag = min_period;
     let mut best_corr = autocorrelation(frame, min_period);
     for lag in (min_period + 1)..=max_period {

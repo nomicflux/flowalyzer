@@ -15,7 +15,7 @@ const HISTORY_CAPACITY_FRAMES: usize = HISTORY_WINDOW_MS / FRAME_HOP_MS;
 pub struct SessionApp {
     handle: SessionHandle,
     controller: SessionController,
-    snapshot: SessionSnapshot,
+    snapshot: Option<SessionSnapshot>,
     control_error: Option<String>,
     histories: HistoryBuffers,
     recipe_start_input: String,
@@ -38,13 +38,21 @@ impl SessionApp {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
-        let variant_changed = snapshot.active_clip_variant != self.snapshot.active_clip_variant;
-        let started_recording = !self.snapshot.recording && snapshot.recording;
+        let variant_changed = self
+            .snapshot
+            .as_ref()
+            .map(|current| snapshot.active_clip_variant != current.active_clip_variant)
+            .unwrap_or(false);
+        let started_recording = self
+            .snapshot
+            .as_ref()
+            .map(|current| !current.recording && snapshot.recording)
+            .unwrap_or(snapshot.recording);
         if variant_changed || started_recording {
             self.clear_histories();
         }
         self.histories.accumulate(&snapshot.alignment);
-        self.snapshot = snapshot;
+        self.snapshot = Some(snapshot);
         self.reference_ready = true;
     }
 
@@ -52,8 +60,33 @@ impl SessionApp {
         self.histories.clear();
     }
 
-    pub fn snapshot(&self) -> &SessionSnapshot {
-        &self.snapshot
+    pub fn snapshot(&self) -> Option<&SessionSnapshot> {
+        self.snapshot.as_ref()
+    }
+
+    fn recording(&self) -> bool {
+        self.snapshot.as_ref().map(|s| s.recording).unwrap_or(false)
+    }
+
+    fn reference_playing(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.reference_playing)
+            .unwrap_or(false)
+    }
+
+    fn active_variant(&self) -> ClipVariant {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.active_clip_variant)
+            .unwrap_or(ClipVariant::Original)
+    }
+
+    fn has_flowalyzed_clip(&self) -> bool {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.has_flowalyzed_clip)
+            .unwrap_or(false)
     }
 
     pub fn config(&self) -> &SessionConfig {
@@ -68,13 +101,13 @@ impl SessionApp {
 
     fn show_top_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let label = if self.snapshot.recording {
+            let label = if self.recording() {
                 "Stop Recording"
             } else {
                 "Start Recording"
             };
             if ui.button(label).clicked() {
-                self.control_error = if self.snapshot.recording {
+                self.control_error = if self.recording() {
                     self.controller.stop().err().map(|err| err.to_string())
                 } else {
                     self.controller.start().err().map(|err| err.to_string())
@@ -87,7 +120,7 @@ impl SessionApp {
                 }
             }
 
-            if self.snapshot.reference_playing && ui.button("Stop Replay").clicked() {
+            if self.reference_playing() && ui.button("Stop Replay").clicked() {
                 if let Err(err) = self.controller.stop_replay() {
                     self.control_error = Some(err.to_string());
                 }
@@ -122,8 +155,8 @@ impl SessionApp {
 
         ui.separator();
 
-        if self.snapshot.has_flowalyzed_clip {
-            let target = match self.snapshot.active_clip_variant {
+        if self.has_flowalyzed_clip() {
+            let target = match self.active_variant() {
                 ClipVariant::Original => ClipVariant::Flowalyzed,
                 ClipVariant::Flowalyzed => ClipVariant::Original,
             };
@@ -140,28 +173,30 @@ impl SessionApp {
             ui.colored_label(Color32::RED, err);
         }
 
-        if let Some(state) = &self.snapshot.recipe_state {
-            ui.label(format!(
-                "Recipe: {} ({}/{})",
-                state.stage.label(),
-                state.completed_steps,
-                state.total_steps
-            ));
+        if let Some(snapshot) = &self.snapshot {
+            if let Some(state) = &snapshot.recipe_state {
+                ui.label(format!(
+                    "Recipe: {} ({}/{})",
+                    state.stage.label(),
+                    state.completed_steps,
+                    state.total_steps
+                ));
+            }
         }
     }
 
     fn show_status(&self, ui: &mut egui::Ui) {
         ui.label(format!(
             "Recording: {}",
-            if self.snapshot.recording { "Yes" } else { "No" }
+            if self.recording() { "Yes" } else { "No" }
         ));
         ui.label(format!(
             "Active variant: {:?}",
-            self.snapshot.active_clip_variant
+            self.active_variant()
         ));
         ui.label(format!(
             "Flowalyzed available: {}",
-            if self.snapshot.has_flowalyzed_clip {
+            if self.has_flowalyzed_clip() {
                 "Yes"
             } else {
                 "No"
@@ -174,14 +209,16 @@ impl SessionApp {
         });
         ui.label(format!(
             "Reference playback: {}",
-            if self.snapshot.reference_playing {
+            if self.reference_playing() {
                 "Playing"
             } else {
                 "Stopped"
             }
         ));
-        if let Some(error) = &self.snapshot.error {
-            ui.colored_label(Color32::RED, format!("Runtime error: {}", error));
+        if let Some(snapshot) = &self.snapshot {
+            if let Some(error) = &snapshot.error {
+                ui.colored_label(Color32::RED, format!("Runtime error: {}", error));
+            }
         }
         ui.separator();
         ui.label(format!(
@@ -493,6 +530,7 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 mod tests {
     use super::*;
     use crate::pronunciation::session::SessionRuntime;
+    use crate::pronunciation::session::PronunciationScores;
     use crate::pronunciation::RecordedClip;
 
     fn dummy_app() -> SessionApp {
@@ -503,14 +541,44 @@ mod tests {
     }
 
     fn report_with_value(value: f32) -> AlignmentReport {
+        let frame_count = HISTORY_CAPACITY_FRAMES / 2;
         AlignmentReport {
-            reference_energy: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            learner_energy: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            reference_pitch: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            learner_pitch: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            similarity_band: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            contour_band: vec![value; HISTORY_CAPACITY_FRAMES / 2],
-            ..AlignmentReport::default()
+            reference_energy: vec![value; frame_count],
+            learner_energy: vec![value; frame_count],
+            reference_pitch: vec![value; frame_count],
+            learner_pitch: vec![value; frame_count],
+            similarity_band: vec![value; frame_count],
+            contour_band: vec![value; frame_count],
+            phonemes: Vec::new(),
+            total_duration: Duration::from_millis((frame_count as u64) * FRAME_HOP_MS as u64),
+            global_time_offset_ms: 0.0,
+            confidence: value,
+        }
+    }
+
+    fn scores_with_value(value: f32) -> PronunciationScores {
+        PronunciationScores {
+            overall: value,
+            timing: value,
+            articulation: value,
+            intonation: value,
+        }
+    }
+
+    fn snapshot_with_alignment(
+        alignment: AlignmentReport,
+        recording: bool,
+        variant: ClipVariant,
+    ) -> SessionSnapshot {
+        SessionSnapshot {
+            alignment,
+            scores: scores_with_value(0.0),
+            recording,
+            reference_playing: false,
+            active_clip_variant: variant,
+            has_flowalyzed_clip: false,
+            recipe_state: None,
+            error: None,
         }
     }
 
@@ -518,10 +586,11 @@ mod tests {
     fn histories_trim_to_window() {
         let mut app = dummy_app();
         for _ in 0..3 {
-            let snapshot = SessionSnapshot {
-                alignment: report_with_value(1.0),
-                ..SessionSnapshot::default()
-            };
+            let snapshot = snapshot_with_alignment(
+                report_with_value(1.0),
+                false,
+                ClipVariant::Original,
+            );
             app.apply_snapshot(snapshot);
         }
         assert_eq!(
@@ -533,10 +602,11 @@ mod tests {
     #[test]
     fn clear_histories_resets_state() {
         let mut app = dummy_app();
-        let snapshot = SessionSnapshot {
-            alignment: report_with_value(0.5),
-            ..SessionSnapshot::default()
-        };
+        let snapshot = snapshot_with_alignment(
+            report_with_value(0.5),
+            false,
+            ClipVariant::Original,
+        );
         app.apply_snapshot(snapshot);
         app.clear_histories();
         assert!(app.histories.reference_energy.is_empty());
@@ -546,33 +616,35 @@ mod tests {
     #[test]
     fn histories_clear_on_variant_toggle() {
         let mut app = dummy_app();
-        let snapshot = SessionSnapshot {
-            alignment: report_with_value(0.5),
-            ..SessionSnapshot::default()
-        };
+        let snapshot = snapshot_with_alignment(
+            report_with_value(0.5),
+            false,
+            ClipVariant::Original,
+        );
         app.apply_snapshot(snapshot);
-        let toggled = SessionSnapshot {
-            active_clip_variant: ClipVariant::Flowalyzed,
-            ..SessionSnapshot::default()
-        };
+        let toggled =
+            snapshot_with_alignment(report_with_value(0.25), false, ClipVariant::Flowalyzed);
         app.apply_snapshot(toggled);
-        assert!(app.histories.reference_energy.is_empty());
-        assert!(app.histories.similarity.is_empty());
+        let expected = HISTORY_CAPACITY_FRAMES / 2;
+        assert_eq!(expected, app.histories.reference_energy.len());
+        assert_eq!(expected, app.histories.similarity.len());
     }
 
     #[test]
     fn histories_clear_on_restart() {
         let mut app = dummy_app();
-        let snapshot = SessionSnapshot {
-            alignment: report_with_value(0.5),
-            ..SessionSnapshot::default()
-        };
+        let snapshot = snapshot_with_alignment(
+            report_with_value(0.5),
+            false,
+            ClipVariant::Original,
+        );
         app.apply_snapshot(snapshot);
-        let restarted = SessionSnapshot {
-            recording: true,
-            ..SessionSnapshot::default()
-        };
+        let restarted = snapshot_with_alignment(
+            report_with_value(0.5),
+            true,
+            ClipVariant::Original,
+        );
         app.apply_snapshot(restarted);
-        assert!(app.histories.reference_energy.is_empty());
+        assert_eq!(HISTORY_CAPACITY_FRAMES / 2, app.histories.reference_energy.len());
     }
 }

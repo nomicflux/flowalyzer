@@ -19,3 +19,9 @@
 - Preserve raw data: no fake values, no legibility hacks; follow silence-as-match and other explicit constraints.
 - Remove test-only helpers; keep code driven by real requirements.
 - Communicate with evidence: analyze first, propose with rationale, then edit.***
+
+## New Lessons
+- When the plan seems contradictory (e.g., hop-phase start vs. tail contribution), stop and ask the user for clarification before coding—never guess or “fix” around the spec. I’ll defer to the plan and ask next time rather than guessing.
+- When tests and the plan diverge, update the tests to the plan; do not bend the implementation to satisfy legacy expectations.
+- Guardrails include silent filters (dropping negative starts, clamping); removing asserts isn’t enough—avoid any pre-checks that change behavior for invalid inputs.
+- Preserve tail contribution and hop phase as written; do not reinterpret examples or adjust offsets without confirmation.***
