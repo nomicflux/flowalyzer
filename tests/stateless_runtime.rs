@@ -16,7 +16,10 @@ fn runtime_spawns_and_shuts_down_without_snapshots_when_never_started() {
     std::thread::sleep(Duration::from_millis(50));
 
     let snapshots = handle.drain_snapshots();
-    assert!(snapshots.is_empty(), "no snapshots expected without alignment");
+    assert!(
+        snapshots.is_empty(),
+        "no snapshots expected without alignment"
+    );
 }
 
 #[test]

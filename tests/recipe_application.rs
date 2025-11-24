@@ -24,7 +24,10 @@ fn applying_recipe_flags_flowalyzed_clip() {
     std::thread::sleep(Duration::from_millis(50));
 
     let snapshots = handle.drain_snapshots();
-    assert!(snapshots.is_empty(), "snapshots should only emit after alignment");
+    assert!(
+        snapshots.is_empty(),
+        "snapshots should only emit after alignment"
+    );
 
     controller.shutdown().ok();
 }
@@ -43,7 +46,10 @@ fn toggle_clip_variant_switches_active_state() {
         .toggle_clip_variant(ClipVariant::Flowalyzed)
         .expect("toggle to flowalyzed");
     let snapshots = handle.drain_snapshots();
-    assert!(snapshots.is_empty(), "no snapshots expected without alignment");
+    assert!(
+        snapshots.is_empty(),
+        "no snapshots expected without alignment"
+    );
 
     controller.shutdown().ok();
 }

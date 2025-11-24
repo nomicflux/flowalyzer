@@ -190,10 +190,7 @@ impl SessionApp {
             "Recording: {}",
             if self.recording() { "Yes" } else { "No" }
         ));
-        ui.label(format!(
-            "Active variant: {:?}",
-            self.active_variant()
-        ));
+        ui.label(format!("Active variant: {:?}", self.active_variant()));
         ui.label(format!(
             "Flowalyzed available: {}",
             if self.has_flowalyzed_clip() {
@@ -529,8 +526,8 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pronunciation::session::SessionRuntime;
     use crate::pronunciation::session::PronunciationScores;
+    use crate::pronunciation::session::SessionRuntime;
     use crate::pronunciation::RecordedClip;
 
     fn dummy_app() -> SessionApp {
@@ -542,17 +539,20 @@ mod tests {
 
     fn report_with_value(value: f32) -> AlignmentReport {
         let frame_count = HISTORY_CAPACITY_FRAMES / 2;
+        let hop_ms = FRAME_HOP_MS as f32;
         AlignmentReport {
             reference_energy: vec![value; frame_count],
             learner_energy: vec![value; frame_count],
+            energy_error: vec![0.0; frame_count],
             reference_pitch: vec![value; frame_count],
             learner_pitch: vec![value; frame_count],
             similarity_band: vec![value; frame_count],
             contour_band: vec![value; frame_count],
-            phonemes: Vec::new(),
-            total_duration: Duration::from_millis((frame_count as u64) * FRAME_HOP_MS as u64),
+            start_frame_idx: 0,
+            end_frame_idx: frame_count,
+            hop_ms,
             global_time_offset_ms: 0.0,
-            confidence: value,
+            total_duration: hop_ms * frame_count as f32,
         }
     }
 
@@ -586,11 +586,8 @@ mod tests {
     fn histories_trim_to_window() {
         let mut app = dummy_app();
         for _ in 0..3 {
-            let snapshot = snapshot_with_alignment(
-                report_with_value(1.0),
-                false,
-                ClipVariant::Original,
-            );
+            let snapshot =
+                snapshot_with_alignment(report_with_value(1.0), false, ClipVariant::Original);
             app.apply_snapshot(snapshot);
         }
         assert_eq!(
@@ -602,11 +599,8 @@ mod tests {
     #[test]
     fn clear_histories_resets_state() {
         let mut app = dummy_app();
-        let snapshot = snapshot_with_alignment(
-            report_with_value(0.5),
-            false,
-            ClipVariant::Original,
-        );
+        let snapshot =
+            snapshot_with_alignment(report_with_value(0.5), false, ClipVariant::Original);
         app.apply_snapshot(snapshot);
         app.clear_histories();
         assert!(app.histories.reference_energy.is_empty());
@@ -616,11 +610,8 @@ mod tests {
     #[test]
     fn histories_clear_on_variant_toggle() {
         let mut app = dummy_app();
-        let snapshot = snapshot_with_alignment(
-            report_with_value(0.5),
-            false,
-            ClipVariant::Original,
-        );
+        let snapshot =
+            snapshot_with_alignment(report_with_value(0.5), false, ClipVariant::Original);
         app.apply_snapshot(snapshot);
         let toggled =
             snapshot_with_alignment(report_with_value(0.25), false, ClipVariant::Flowalyzed);
@@ -633,18 +624,15 @@ mod tests {
     #[test]
     fn histories_clear_on_restart() {
         let mut app = dummy_app();
-        let snapshot = snapshot_with_alignment(
-            report_with_value(0.5),
-            false,
-            ClipVariant::Original,
-        );
+        let snapshot =
+            snapshot_with_alignment(report_with_value(0.5), false, ClipVariant::Original);
         app.apply_snapshot(snapshot);
-        let restarted = snapshot_with_alignment(
-            report_with_value(0.5),
-            true,
-            ClipVariant::Original,
-        );
+        let restarted =
+            snapshot_with_alignment(report_with_value(0.5), true, ClipVariant::Original);
         app.apply_snapshot(restarted);
-        assert_eq!(HISTORY_CAPACITY_FRAMES / 2, app.histories.reference_energy.len());
+        assert_eq!(
+            HISTORY_CAPACITY_FRAMES / 2,
+            app.histories.reference_energy.len()
+        );
     }
 }

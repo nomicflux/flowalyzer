@@ -1,17 +1,17 @@
-use std::time::Duration;
-
 #[derive(Debug, Clone)]
 pub struct AlignmentReport {
-    pub reference_energy: Vec<f32>,    // Current chunk only
-    pub learner_energy: Vec<f32>,      // Current chunk only
-    pub reference_pitch: Vec<f32>,     // Current chunk only
-    pub learner_pitch: Vec<f32>,       // Current chunk only
-    pub similarity_band: Vec<f32>,     // Current chunk only
-    pub contour_band: Vec<f32>,        // Current chunk only
-    pub phonemes: Vec<AlignedPhoneme>, // Current chunk only
-    pub total_duration: Duration,
+    pub reference_energy: Vec<f32>, // Current chunk only
+    pub learner_energy: Vec<f32>,   // Current chunk only
+    pub energy_error: Vec<f32>,     // Current chunk only
+    pub reference_pitch: Vec<f32>,  // Current chunk only
+    pub learner_pitch: Vec<f32>,    // Current chunk only
+    pub similarity_band: Vec<f32>,  // Current chunk only
+    pub contour_band: Vec<f32>,     // Current chunk only
+    pub start_frame_idx: usize,
+    pub end_frame_idx: usize,
+    pub hop_ms: f32,
     pub global_time_offset_ms: f32,
-    pub confidence: f32,
+    pub total_duration: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -24,15 +24,6 @@ pub struct SessionSnapshot {
     pub has_flowalyzed_clip: bool,
     pub recipe_state: Option<RecipeApplicationProgress>,
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AlignedPhoneme {
-    pub symbol: String,
-    pub timing_delta_ms: f32,
-    pub similarity: f32,
-    pub articulation_variance: f32,
-    pub contour_similarity: f32,
 }
 
 #[derive(Debug, Clone)]

@@ -151,3 +151,6 @@ All rules are binary: MUST do X or MUST NOT do Y. Every substep lists acceptance
 - When tests diverge from the plan, update the tests to match the plan rather than bending implementation to legacy expectations.
 - Treat silent filters/clamps (like dropping negative starts) as guardrails; removing asserts is not enough.
 - Preserve tail contribution and hop phase exactly as written; do not reinterpret examples or adjust offsets without confirmation.
+- Do not project into later phases or mention them; stay strictly inside the current phase scope.
+- Do not think about downstream usage unless explicitly asked; focus solely on the active phase’s requirements.
+- Phase updates must report only current-phase work and avoid labels or references to future phases.

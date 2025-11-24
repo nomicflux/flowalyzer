@@ -60,7 +60,10 @@ impl SessionEngine {
         let report = align_features(
             &reference_features,
             &learner_features,
+            0,
             self.global_offset_ms(),
+            self.sample_rate,
+            self.feature_cfg.hop_samples,
         );
         self.remember_boundary_chunk(learner_samples);
         self.advance_counter(learner_samples.len());

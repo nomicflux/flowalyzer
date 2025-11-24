@@ -14,7 +14,7 @@ pub mod alignment;
 pub mod features;
 pub mod session;
 pub use session::{
-    AlignedPhoneme, AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
+    AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
     RecipeApplicationStage, SessionSnapshot,
 };
 

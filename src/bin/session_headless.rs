@@ -73,11 +73,12 @@ fn run_headless(engine: &mut SessionEngine, learner: &RecordedClip) {
         }
         let report = engine.process_chunk(chunk);
         println!(
-            "chunk {:03} offset={:7.2}ms confidence={:.3} frames={}",
+            "chunk {:03} offset={:7.2}ms start={} frames={} duration_ms={:.2}",
             chunk_index,
             report.global_time_offset_ms,
-            report.confidence,
-            report.reference_energy.len()
+            report.start_frame_idx,
+            report.reference_energy.len(),
+            report.total_duration
         );
         chunk_index += 1;
     }
