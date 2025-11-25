@@ -10,11 +10,9 @@ use crate::audio::playback::duplicate_to_stereo;
 use crate::audio::resample::linear_resample;
 use crate::pronunciation::features::{FeatureConfig, FeatureExtractor};
 use crate::pronunciation::session::{
-    AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
-    RecipeApplicationStage, SessionConfig, SessionEngine, SessionSnapshot,
+    AlignmentReport, SessionConfig, SessionEngine, SessionSnapshot,
 };
-use crate::pronunciation::{apply_recipe_to_range, PronunciationError, RecordedClip, Result};
-use crate::types::Recipe;
+use crate::pronunciation::{PronunciationError, RecordedClip, Result};
 use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
 
 thread_local! {
@@ -26,19 +24,11 @@ pub enum SessionCommand {
     Stop,
     ReplayReference,
     StopReplay,
-    ApplyRecipe {
-        start_sec: f64,
-        end_sec: f64,
-        recipe: Recipe,
-    },
-    ToggleClipVariant(ClipVariant),
     Shutdown,
 }
 
 pub struct SessionRuntime {
     reference_clip: Arc<RecordedClip>,
-    flowalyzed_clip: Arc<Mutex<Option<RecordedClip>>>,
-    active_variant: Arc<Mutex<ClipVariant>>,
     reference_playing: Arc<AtomicBool>,
     playback_state: Arc<Mutex<Option<PlaybackState>>>,
     engine: Arc<Mutex<SessionEngine>>,
@@ -79,8 +69,6 @@ impl SessionRuntime {
         let engine = Self::create_engine(&reference_clip.samples, config.sample_rate);
         let runtime = Self {
             reference_clip: reference_clip.clone(),
-            flowalyzed_clip: Arc::new(Mutex::new(None)),
-            active_variant: Arc::new(Mutex::new(ClipVariant::Original)),
             reference_playing: Arc::new(AtomicBool::new(false)),
             playback_state: Arc::new(Mutex::new(None)),
             engine: Arc::new(Mutex::new(engine)),
@@ -133,7 +121,7 @@ impl SessionRuntime {
                     Self::clear_buffer(&self.capture_buffer);
                     Self::clear_buffer(&self.resampled_buffer);
                     self.tail_seeded.store(false, Ordering::SeqCst);
-                    if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                    if let Some(snapshot) = self.snapshot_from_last(false) {
                         let _ = self.snapshot_sender.send(snapshot);
                     }
                 }
@@ -148,14 +136,6 @@ impl SessionRuntime {
                 }
                 Ok(SessionCommand::StopReplay) => {
                     self.stop_reference_playback();
-                }
-                Ok(SessionCommand::ApplyRecipe {
-                    start_sec,
-                    end_sec,
-                    recipe,
-                }) => self.handle_apply_recipe(start_sec, end_sec, recipe),
-                Ok(SessionCommand::ToggleClipVariant(variant)) => {
-                    self.handle_toggle_variant(variant)
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => break,
@@ -242,33 +222,16 @@ impl SessionRuntime {
     }
 
     fn snapshot_for(&self, alignment: AlignmentReport, recording: bool) -> SessionSnapshot {
-        self.snapshot_internal(
-            alignment,
-            PronunciationScores::default(),
-            recording,
-            None,
-            None,
-        )
+        self.snapshot_internal(alignment, recording)
     }
 
-    fn snapshot_from_last(
-        &self,
-        recording: bool,
-        recipe_state: Option<RecipeApplicationProgress>,
-        error: Option<String>,
-    ) -> Option<SessionSnapshot> {
+    fn snapshot_from_last(&self, recording: bool) -> Option<SessionSnapshot> {
         let alignment = self
             .last_alignment
             .lock()
             .ok()
             .and_then(|guard| guard.clone())?;
-        Some(self.snapshot_internal(
-            alignment,
-            PronunciationScores::default(),
-            recording,
-            recipe_state,
-            error,
-        ))
+        Some(self.snapshot_internal(alignment, recording))
     }
 
     fn required_tail_len(&self) -> usize {
@@ -276,23 +239,11 @@ impl SessionRuntime {
         cfg.frame_len_samples - cfg.hop_samples
     }
 
-    fn snapshot_internal(
-        &self,
-        alignment: AlignmentReport,
-        scores: PronunciationScores,
-        recording: bool,
-        recipe_state: Option<RecipeApplicationProgress>,
-        error: Option<String>,
-    ) -> SessionSnapshot {
+    fn snapshot_internal(&self, alignment: AlignmentReport, recording: bool) -> SessionSnapshot {
         SessionSnapshot {
             alignment,
-            scores,
             recording,
             reference_playing: self.reference_playing.load(Ordering::SeqCst),
-            active_clip_variant: self.current_variant(),
-            has_flowalyzed_clip: self.has_flowalyzed_clip(),
-            recipe_state,
-            error,
         }
     }
 
@@ -310,7 +261,7 @@ impl SessionRuntime {
                 });
                 self.reference_playing.store(true, Ordering::SeqCst);
                 *self.playback_state.lock().unwrap() = Some(PlaybackState { sink: sink_arc });
-                if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+                if let Some(snapshot) = self.snapshot_from_last(false) {
                     let _ = self.snapshot_sender.send(snapshot);
                 }
             }
@@ -324,7 +275,7 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+            if let Some(snapshot) = self.snapshot_from_last(false) {
                 let _ = self.snapshot_sender.send(snapshot);
             }
         }
@@ -347,107 +298,10 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
+            if let Some(snapshot) = self.snapshot_from_last(false) {
                 let _ = self.snapshot_sender.send(snapshot);
             }
         }
-    }
-
-    fn handle_apply_recipe(&self, start_sec: f64, end_sec: f64, recipe: Recipe) {
-        self.recipe_progress_snapshot(RecipeApplicationStage::ExtractingAudio, 1, 3, None);
-        self.recipe_progress_snapshot(RecipeApplicationStage::ApplyingRecipe, 2, 3, None);
-        match apply_recipe_to_range(&self.reference_clip, start_sec, end_sec, &recipe) {
-            Ok(flowalyzed) => {
-                *self.flowalyzed_clip.lock().unwrap() = Some(flowalyzed);
-                self.recipe_progress_snapshot(RecipeApplicationStage::SavingResult, 3, 3, None);
-            }
-            Err(err) => {
-                self.recipe_progress_snapshot(
-                    RecipeApplicationStage::ApplyingRecipe,
-                    2,
-                    3,
-                    Some(err.to_string()),
-                );
-            }
-        }
-    }
-
-    fn recipe_progress_snapshot(
-        &self,
-        stage: RecipeApplicationStage,
-        completed_steps: u32,
-        total_steps: u32,
-        error: Option<String>,
-    ) {
-        let progress = self.recipe_progress(stage, completed_steps, total_steps);
-        if let Some(snapshot) = self.snapshot_from_last(false, Some(progress), error) {
-            let _ = self.snapshot_sender.send(snapshot);
-        }
-    }
-
-    fn recipe_progress(
-        &self,
-        stage: RecipeApplicationStage,
-        completed_steps: u32,
-        total_steps: u32,
-    ) -> RecipeApplicationProgress {
-        RecipeApplicationProgress {
-            stage,
-            completed_steps,
-            total_steps,
-            sub_stage_index: 0,
-            sub_stage_total: 0,
-            sub_stage_label: None,
-            metric_label: None,
-            current_value: None,
-            total_value: None,
-            elapsed_secs: None,
-        }
-    }
-
-    fn handle_toggle_variant(&self, variant: ClipVariant) {
-        if variant == self.current_variant() {
-            return;
-        }
-        self.stop_reference_playback();
-        let clip = match variant {
-            ClipVariant::Original => Some((*self.reference_clip).clone()),
-            ClipVariant::Flowalyzed => self.flowalyzed_clip.lock().unwrap().clone(),
-        };
-        match clip {
-            Some(clip) => {
-                let engine = self.engine.clone();
-                let config = self.config.clone();
-                std::thread::spawn(move || {
-                    if let Ok(mut engine) = engine.lock() {
-                        *engine = SessionRuntime::create_engine(&clip.samples, config.sample_rate);
-                    }
-                });
-                if let Ok(mut active) = self.active_variant.lock() {
-                    *active = variant;
-                }
-                if let Some(snapshot) = self.snapshot_from_last(false, None, None) {
-                    let _ = self.snapshot_sender.send(snapshot);
-                }
-            }
-            None => {
-                if let Some(snapshot) = self.snapshot_from_last(
-                    false,
-                    None,
-                    Some("flowalyzed clip not available".to_string()),
-                ) {
-                    let _ = self.snapshot_sender.send(snapshot);
-                }
-            }
-        }
-    }
-
-    fn current_variant(&self) -> ClipVariant {
-        *self.active_variant.lock().unwrap()
-    }
-
-    fn has_flowalyzed_clip(&self) -> bool {
-        self.flowalyzed_clip.lock().unwrap().is_some()
     }
 
     fn clear_buffer(buffer: &Arc<Mutex<Vec<f32>>>) {
@@ -581,22 +435,6 @@ impl SessionController {
     pub fn stop_replay(&self) -> Result<()> {
         self.command_sender
             .send(SessionCommand::StopReplay)
-            .map_err(|_| PronunciationError::new("runtime disconnected"))
-    }
-
-    pub fn apply_recipe(&self, start_sec: f64, end_sec: f64, recipe: Recipe) -> Result<()> {
-        self.command_sender
-            .send(SessionCommand::ApplyRecipe {
-                start_sec,
-                end_sec,
-                recipe,
-            })
-            .map_err(|_| PronunciationError::new("runtime disconnected"))
-    }
-
-    pub fn toggle_clip_variant(&self, variant: ClipVariant) -> Result<()> {
-        self.command_sender
-            .send(SessionCommand::ToggleClipVariant(variant))
             .map_err(|_| PronunciationError::new("runtime disconnected"))
     }
 

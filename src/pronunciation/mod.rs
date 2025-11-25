@@ -13,10 +13,7 @@ use crate::types::{AudioChunk, AudioData, FrameCount, FrameIndex, FrameRange, Re
 pub mod alignment;
 pub mod features;
 pub mod session;
-pub use session::{
-    AlignmentReport, ClipVariant, PronunciationScores, RecipeApplicationProgress,
-    RecipeApplicationStage, SessionSnapshot,
-};
+pub use session::{AlignmentReport, SessionSnapshot};
 
 const MAX_CLIP_DURATION_SECS: u64 = 300; // 5 minutes
 
