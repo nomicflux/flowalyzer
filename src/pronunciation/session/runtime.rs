@@ -73,10 +73,6 @@ impl SessionRuntime {
         config: SessionConfig,
         capture_builder: Arc<dyn CaptureBuilder>,
     ) -> (SessionHandle, SessionController) {
-        assert!(
-            !reference_clip.samples.is_empty(),
-            "reference clip cannot be empty"
-        );
         let (snapshot_tx, snapshot_rx) = mpsc::channel();
         let (command_tx, command_rx) = mpsc::channel();
         let reference_clip = Arc::new(reference_clip);
@@ -121,19 +117,7 @@ impl SessionRuntime {
                     Self::clear_buffer(&self.capture_buffer);
                     Self::clear_buffer(&self.resampled_buffer);
                     self.tail_seeded.store(false, Ordering::SeqCst);
-                    match self.start_capture() {
-                        Ok(new_capture) => {
-                            capture = Some(new_capture);
-                        }
-                        Err(err) => {
-                            recording = false;
-                            if let Some(snapshot) =
-                                self.snapshot_from_last(false, None, Some(err.to_string()))
-                            {
-                                let _ = self.snapshot_sender.send(snapshot);
-                            }
-                        }
-                    }
+                    capture = Some(self.start_capture());
                     if let Ok(mut engine) = self.engine.lock() {
                         engine.reset();
                     }
@@ -188,78 +172,70 @@ impl SessionRuntime {
         }
     }
 
-    fn start_capture(&self) -> Result<Box<dyn CaptureSource>> {
+    fn start_capture(&self) -> Box<dyn CaptureSource> {
         let mut capture_config = CaptureConfig::new();
         capture_config.sample_rate = self
             .config
             .capture_sample_rate
             .unwrap_or(self.config.sample_rate);
         capture_config.latency_ms = self.config.latency_range.clone();
-        self.capture_builder
-            .start_capture(&capture_config)
-            .map_err(|err| PronunciationError::new(err.to_string()))
+        self.capture_builder.start_capture(&capture_config).unwrap()
     }
 
     fn process_capture_chunk(&self, capture: &mut dyn CaptureSource) {
-        let timeout = Duration::from_millis(self.config.chunk_duration_ms as u64);
+        let timeout = Duration::from_millis(0);
         let target_len =
             (self.config.sample_rate as usize * self.config.chunk_duration_ms as usize) / 1_000;
         let incoming_rate = capture.sample_rate();
         let mut buffer = self.capture_buffer.lock().unwrap();
         while let Some(chunk) = capture.recv_chunk(timeout) {
             buffer.extend_from_slice(&chunk);
-            match collect_resampled_chunk_from_buffer(
-                &buffer,
-                target_len,
-                incoming_rate,
-                self.config.sample_rate,
-            ) {
-                Ok(Some((processed, remaining))) => {
-                    *buffer = remaining;
-                    let mut staging = self.resampled_buffer.lock().unwrap();
-                    staging.extend_from_slice(&processed);
-                    let required_tail_len = self.required_tail_len();
-                    while staging.len()
-                        >= if self.tail_seeded.load(Ordering::SeqCst) {
-                            target_len
-                        } else {
-                            required_tail_len + target_len
-                        }
-                    {
-                        if !self.tail_seeded.load(Ordering::SeqCst) {
-                            let tail = staging[..required_tail_len].to_vec();
-                            let chunk =
-                                staging[required_tail_len..required_tail_len + target_len].to_vec();
-                            *staging = staging[required_tail_len + target_len..].to_vec();
-                            if let Ok(mut engine) = self.engine.lock() {
-                                engine.seed_tail(&tail);
-                                let report = engine.process_chunk(&chunk);
-                                if let Ok(mut last) = self.last_alignment.lock() {
-                                    *last = Some(report.clone());
-                                }
-                                let snapshot = self.snapshot_for(report, true);
-                                let _ = self.snapshot_sender.send(snapshot);
-                            }
-                            self.tail_seeded.store(true, Ordering::SeqCst);
-                        } else {
-                            let chunk = staging[..target_len].to_vec();
-                            *staging = staging[target_len..].to_vec();
-                            if let Ok(mut engine) = self.engine.lock() {
-                                let report = engine.process_chunk(&chunk);
-                                if let Ok(mut last) = self.last_alignment.lock() {
-                                    *last = Some(report.clone());
-                                }
-                                let snapshot = self.snapshot_for(report, true);
-                                let _ = self.snapshot_sender.send(snapshot);
-                            }
-                        }
-                    }
+        }
+
+        if let Some((processed, remaining)) = collect_resampled_chunk_from_buffer(
+            &buffer,
+            target_len,
+            incoming_rate,
+            self.config.sample_rate,
+        )
+        .unwrap()
+        {
+            *buffer = remaining;
+            let mut staging = self.resampled_buffer.lock().unwrap();
+            staging.extend_from_slice(&processed);
+            let required_tail_len = self.required_tail_len();
+            while staging.len()
+                >= if self.tail_seeded.load(Ordering::SeqCst) {
+                    target_len
+                } else {
+                    required_tail_len + target_len
                 }
-                Ok(None) => break,
-                Err(err) => {
-                    buffer.clear();
-                    let _ = err;
-                    break;
+            {
+                if !self.tail_seeded.load(Ordering::SeqCst) {
+                    let tail = staging[..required_tail_len].to_vec();
+                    let chunk = staging[required_tail_len..required_tail_len + target_len].to_vec();
+                    *staging = staging[required_tail_len + target_len..].to_vec();
+                    if let Ok(mut engine) = self.engine.lock() {
+                        engine.seed_tail(&tail);
+                        let report = engine.process_chunk(&chunk);
+                        if let Ok(mut last) = self.last_alignment.lock() {
+                            *last = Some(report.clone());
+                        }
+                        let snapshot = self.snapshot_for(report, true);
+                        let _ = self.snapshot_sender.send(snapshot);
+                    }
+                    self.tail_seeded.store(true, Ordering::SeqCst);
+                } else {
+                    let chunk = staging[..target_len].to_vec();
+                    *staging = staging[target_len..].to_vec();
+                    if let Ok(mut engine) = self.engine.lock() {
+                        let report = engine.process_chunk(&chunk);
+                        if let Ok(mut last) = self.last_alignment.lock() {
+                            *last = Some(report.clone());
+                        }
+                        let snapshot = self.snapshot_for(report, true);
+                        let _ = self.snapshot_sender.send(snapshot);
+                    }
                 }
             }
         }
@@ -323,9 +299,6 @@ impl SessionRuntime {
     fn start_reference_playback(&self) {
         self.stop_reference_playback();
         let samples: Vec<f32> = self.reference_clip.samples.iter().copied().collect();
-        if samples.is_empty() {
-            return;
-        }
         let sample_rate = self.reference_clip.sample_rate;
         if let Ok((stream, stream_handle)) = OutputStream::try_default() {
             if let Ok(sink) = Sink::try_new(&stream_handle) {
@@ -485,10 +458,6 @@ impl SessionRuntime {
 }
 
 fn required_raw_samples(target_len: usize, input_rate: u32, output_rate: u32) -> usize {
-    assert!(
-        input_rate > 0 && output_rate > 0,
-        "sample rates must be positive"
-    );
     (target_len as u64 * input_rate as u64).div_ceil(output_rate as u64) as usize
 }
 
@@ -502,9 +471,6 @@ fn collect_resampled_chunk<F>(
 where
     F: FnMut() -> Option<Vec<f32>>,
 {
-    if input_rate == 0 || output_rate == 0 {
-        return Err(PronunciationError::new("sample rate must be positive"));
-    }
     let mut raw_samples = Vec::new();
     let mut required = required_raw_samples(target_len, input_rate, output_rate);
 
@@ -559,10 +525,6 @@ fn collect_resampled_chunk_from_buffer(
         linear_resample(to_process, input_rate, output_rate)
             .map_err(|err| PronunciationError::new(err.to_string()))?
     };
-    if resampled.len() < target_len {
-        // Should not happen given required calculation, but guard anyway.
-        return Ok(None);
-    }
     Ok(Some((resampled, remainder.to_vec())))
 }
 

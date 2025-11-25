@@ -64,12 +64,12 @@ All rules are binary: MUST do X or MUST NOT do Y. Every substep lists acceptance
 
 ### 2.3 AlignmentReport is source-only (file: `src/pronunciation/session/snapshot.rs`)
 - Deliverable: report contains only real metrics/indices; no defaults/placeholders.
-- Actions: keep fields: reference_energy, learner_energy, reference_pitch, learner_pitch, energy_error, similarity_band, contour_band, start_frame_idx, end_frame_idx, hop_ms, global_time_offset_ms, total_duration. Remove confidence/phoneme/recipe/defaults. No `Default` impl that fabricates data.
+- Actions: keep fields: reference_energy, learner_energy, reference_pitch, learner_pitch, energy_error, similarity_band, contour_band, start_frame_idx, end_frame_idx, hop_ms, global_time_offset_ms, total_duration. No `Default` impl that fabricates data.
 - Acceptance: cannot construct without real alignment vectors; serialization reflects actual data only.
 
 ### 2.4 Alignment tests codify contract (file: `tests/alignment.rs`)
 - Deliverable: tests that panic on bad shapes and check numeric outputs exactly.
-- Actions: add `#[should_panic]` for length mismatch/out-of-range start_frame_idx (natural panic). Add deterministic metric test (ref energy [1,1], learner [2,2] ⇒ error [1,1], similarity [0,0]; ref pitch [100], learner [200] ⇒ contour 1200; hop_ms/total_duration exact). Restate hop-phase invariant in test names/comments. Remove legacy tests relying on confidence/placeholder/re-anchoring.
+- Actions: add `#[should_panic]` for length mismatch/out-of-range start_frame_idx (natural panic). Add deterministic metric test (ref energy [1,1], learner [2,2] ⇒ error [1,1], similarity [0,0]; ref pitch [100], learner [200] ⇒ contour 1200; hop_ms/total_duration exact). Restate hop-phase invariant in test names/comments. Remove legacy tests.
 - Acceptance: cargo test passes with new invariants; grep shows no guardrail patterns in alignment code/tests.
 
 ## Step 3: Session Engine Statelessness
@@ -110,7 +110,7 @@ All rules are binary: MUST do X or MUST NOT do Y. Every substep lists acceptance
 
 ### 4.3 Command/snapshot surface stays minimal (files: `src/pronunciation/session/runtime.rs`, `src/pronunciation/session/snapshot.rs`)
 - Deliverable: command enum limited to Start/Stop/Shutdown/ReplayReference/StopReplay; snapshots only from real alignment data.
-- Actions: remove extra commands; remove recipe/error/placeholder fields; no `Default` for snapshots.
+- Actions: remove extra commands; remove error/placeholder fields; no `Default` for snapshots.
 - Acceptance: cannot construct snapshot without alignment data; no extra commands remain; grep shows no guardrails.
 
 ### 4.4 Runtime tests ban fallbacks (file: `tests/stateless_runtime.rs` or similar)

@@ -460,13 +460,26 @@ fn draw_row<F>(
         return;
     }
     let length = source.len();
-    let column_width = (inner.width() / columns as f32).max(1.0);
+    let available_columns = columns.min(length).max(1);
+    let column_width = (inner.width() / available_columns as f32).max(1.0);
     let column_height = inner.height() / 2.0;
-    for col in 0..columns {
-        let sample_idx =
-            ((col as f32) * length as f32 / columns as f32).min((length - 1) as f32) as usize;
+    let (min, max) = source
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
+            (min.min(value), max.max(value))
+        });
+    let mid = (min + max) * 0.5;
+    let half_span = (max - min) * 0.5;
+    for col in 0..available_columns {
+        let sample_idx = ((col as f32) * length as f32 / available_columns as f32)
+            .min((length - 1) as f32) as usize;
         let value = *source.get(sample_idx).unwrap_or(&0.0);
-        let color = color_fn(value);
+        let normalized = if half_span > 0.0 {
+            0.5 + 0.5 * (value - mid) / half_span
+        } else {
+            0.5
+        };
+        let color = color_fn(normalized);
         let left = inner.left() + col as f32 * column_width;
         let right = left + column_width - 1.0;
         let top = inner.top() + row as f32 * column_height;
@@ -480,10 +493,9 @@ fn similarity_color(value: f32) -> Color32 {
     gradient_color(
         value,
         &[
-            (0.0, Color32::from_rgb(255, 0, 0)),
-            (0.3, Color32::from_rgb(255, 165, 0)),
-            (0.6, Color32::from_rgb(0, 255, 0)),
-            (1.0, Color32::from_rgb(0, 0, 255)),
+            (0.0, Color32::from_rgb(180, 32, 32)),
+            (0.5, Color32::from_rgb(244, 180, 66)),
+            (1.0, Color32::from_rgb(26, 158, 92)),
         ],
     )
 }
@@ -500,7 +512,7 @@ fn contour_color(value: f32) -> Color32 {
 }
 
 fn gradient_color(value: f32, stops: &[(f32, Color32)]) -> Color32 {
-    let v = value.clamp(0.0, 1.0);
+    let v = value;
     if let Some((first_pos, first_color)) = stops.first() {
         if v <= *first_pos {
             return *first_color;
