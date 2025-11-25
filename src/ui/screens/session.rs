@@ -469,13 +469,13 @@ fn draw_row<F>(
             (min.min(value), max.max(value))
         });
     let mid = 0.0;
-    let span = (max - min).abs().max(1e-6);
+    let span = (max - min).abs();
     for col in 0..available_columns {
         let sample_idx = ((col as f32) * length as f32 / available_columns as f32)
             .min((length - 1) as f32) as usize;
         let value = *source.get(sample_idx).unwrap_or(&0.0);
         let normalized = 0.5 + 0.5 * (value - mid) / span;
-        let color = color_fn(normalized.clamp(0.0, 1.0));
+        let color = color_fn(normalized);
         let left = inner.left() + col as f32 * column_width;
         let right = left + column_width - 1.0;
         let top = inner.top() + row as f32 * column_height;
