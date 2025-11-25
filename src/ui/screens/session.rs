@@ -33,11 +33,10 @@ impl SessionApp {
     }
 
     pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
-        let started_recording = self
-            .snapshot
-            .as_ref()
-            .map(|current| !current.recording && snapshot.recording)
-            .unwrap_or(snapshot.recording);
+        let started_recording = match self.snapshot.as_ref() {
+            Some(current) => !current.recording && snapshot.recording,
+            None => snapshot.recording,
+        };
         if started_recording {
             self.clear_histories();
         }
@@ -55,14 +54,14 @@ impl SessionApp {
     }
 
     fn recording(&self) -> bool {
-        self.snapshot.as_ref().map(|s| s.recording).unwrap_or(false)
+        self.snapshot.as_ref().map(|s| s.recording).unwrap()
     }
 
     fn reference_playing(&self) -> bool {
         self.snapshot
             .as_ref()
             .map(|s| s.reference_playing)
-            .unwrap_or(false)
+            .unwrap()
     }
 
     pub fn config(&self) -> &SessionConfig {
@@ -315,7 +314,7 @@ fn draw_comparison_panel(ui: &mut egui::Ui, similarity: &VecDeque<f32>, contour:
     const ROWS: usize = 2;
     let rows = ROWS;
     let max_columns = HISTORY_CAPACITY_FRAMES / 10; // ~300 columns at 10ms hop = 3s segments; still under 300
-    let columns = max_columns.clamp(32, HISTORY_CAPACITY_FRAMES);
+    let columns = max_columns;
     for row in 0..rows {
         let source = if row == 0 { similarity } else { contour };
         draw_row(
@@ -365,7 +364,7 @@ fn draw_row<F>(
     for col in 0..available_columns {
         let sample_idx = ((col as f32) * length as f32 / available_columns as f32)
             .min((length - 1) as f32) as usize;
-        let value = *source.get(sample_idx).unwrap_or(&0.0);
+        let value = *source.get(sample_idx).unwrap();
         let normalized = 0.5 + 0.5 * (value - mid) / span;
         let color = color_fn(normalized);
         let left = inner.left() + col as f32 * column_width;
@@ -412,14 +411,13 @@ fn gradient_color(value: f32, stops: &[(f32, Color32)]) -> Color32 {
             return lerp_color(window[0].1, window[1].1, t);
         }
     }
-    stops.last().map(|(_, c)| *c).unwrap_or(Color32::WHITE)
+    stops.last().map(|(_, c)| *c).unwrap()
 }
 
 fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let ta = t.clamp(0.0, 1.0);
-    let r = a.r() as f32 + (b.r() as f32 - a.r() as f32) * ta;
-    let g = a.g() as f32 + (b.g() as f32 - a.g() as f32) * ta;
-    let b = a.b() as f32 + (b.b() as f32 - a.b() as f32) * ta;
+    let r = a.r() as f32 + (b.r() as f32 - a.r() as f32) * t;
+    let g = a.g() as f32 + (b.g() as f32 - a.g() as f32) * t;
+    let b = a.b() as f32 + (b.b() as f32 - a.b() as f32) * t;
     Color32::from_rgb(r as u8, g as u8, b as u8)
 }
 
