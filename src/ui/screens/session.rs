@@ -468,18 +468,14 @@ fn draw_row<F>(
         .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
             (min.min(value), max.max(value))
         });
-    let mid = (min + max) * 0.5;
-    let half_span = (max - min) * 0.5;
+    let mid = 0.0;
+    let span = (max - min).abs().max(1e-6);
     for col in 0..available_columns {
         let sample_idx = ((col as f32) * length as f32 / available_columns as f32)
             .min((length - 1) as f32) as usize;
         let value = *source.get(sample_idx).unwrap_or(&0.0);
-        let normalized = if half_span > 0.0 {
-            0.5 + 0.5 * (value - mid) / half_span
-        } else {
-            0.5
-        };
-        let color = color_fn(normalized);
+        let normalized = 0.5 + 0.5 * (value - mid) / span;
+        let color = color_fn(normalized.clamp(0.0, 1.0));
         let left = inner.left() + col as f32 * column_width;
         let right = left + column_width - 1.0;
         let top = inner.top() + row as f32 * column_height;
@@ -493,9 +489,9 @@ fn similarity_color(value: f32) -> Color32 {
     gradient_color(
         value,
         &[
-            (0.0, Color32::from_rgb(180, 32, 32)),
+            (0.0, Color32::from_rgb(26, 158, 92)),
             (0.5, Color32::from_rgb(244, 180, 66)),
-            (1.0, Color32::from_rgb(26, 158, 92)),
+            (1.0, Color32::from_rgb(180, 32, 32)),
         ],
     )
 }

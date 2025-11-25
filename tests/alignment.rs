@@ -33,7 +33,7 @@ fn identical_chunks_keep_similarity_high() {
     assert!(report
         .similarity_band
         .iter()
-        .all(|value| (*value - 1.0).abs() < 1e-6));
+        .all(|value| (*value).abs() < 1e-6));
     assert!(report.contour_band.iter().all(|value| value.abs() < 1e-6));
     assert!((report.total_duration - 30.0).abs() < 1e-6);
     assert_eq!(report.start_frame_idx, 0);
@@ -51,7 +51,7 @@ fn slices_reference_from_start_frame_index() {
     assert!(report
         .similarity_band
         .iter()
-        .all(|value| (*value - 1.0).abs() < 1e-6));
+        .all(|value| (*value).abs() < 1e-6));
     assert!(report.contour_band.iter().all(|value| value.abs() < 1e-6));
     assert_eq!(report.global_time_offset_ms, 15.0);
     assert!((report.hop_ms - 10.0).abs() < 1e-6);
@@ -72,7 +72,11 @@ fn computes_raw_metric_bands() {
     );
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
     assert_eq!(report.energy_error, vec![1.0; 5]);
-    assert_eq!(report.similarity_band, vec![0.0; 5]);
+    let expected = -1.3862944;
+    assert!(report
+        .similarity_band
+        .iter()
+        .all(|value| (*value - expected).abs() < 1e-6));
     assert_eq!(report.contour_band, vec![1200.0; 5]);
     assert!((report.hop_ms - 10.0).abs() < 1e-6);
     assert_eq!(report.start_frame_idx, 0);

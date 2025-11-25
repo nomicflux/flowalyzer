@@ -48,7 +48,12 @@ pub fn align_features(
     let reference_pitch = reference.pitch[start_frame_idx..end_frame_idx].to_vec();
 
     let energy_error = compute_energy_error(&reference_energy, &learner.energy);
-    let similarity = compute_similarity(&reference_energy, &energy_error);
+    let similarity = compute_similarity(
+        &reference_energy,
+        &learner.energy,
+        &reference_pitch,
+        &learner.pitch,
+    );
     let contour = compute_contour_band(&reference_pitch, &learner.pitch);
     let hop_ms = hop_samples as f32 / sample_rate as f32 * 1000.0;
     AlignmentReport {
@@ -73,9 +78,18 @@ fn compute_energy_error(reference: &[f32], learner: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-fn compute_similarity(reference: &[f32], energy_error: &[f32]) -> Vec<f32> {
-    (0..reference.len())
-        .map(|index| 1.0 - energy_error[index].abs() / reference[index].abs())
+fn compute_similarity(
+    reference_energy: &[f32],
+    learner_energy: &[f32],
+    reference_pitch: &[f32],
+    learner_pitch: &[f32],
+) -> Vec<f32> {
+    (0..reference_energy.len())
+        .map(|index| {
+            let energy_ratio = (learner_energy[index] / reference_energy[index]).ln().abs();
+            let pitch_ratio = (learner_pitch[index] / reference_pitch[index]).ln().abs();
+            -(energy_ratio + pitch_ratio)
+        })
         .collect()
 }
 
