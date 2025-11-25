@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
 use clap::Parser;
 use eframe::NativeOptions;
 use flowalyzer::pronunciation::load_clip;
@@ -24,23 +23,23 @@ struct Args {
     capture_sample_rate: Option<u32>,
 }
 
-fn main() -> Result<()> {
+fn main() {
     let args = Args::parse();
-    let clip = load_clip(&args.reference)?;
+    let clip = load_clip(&args.reference).unwrap();
     let config = SessionConfig {
         sample_rate: args.engine_sample_rate.unwrap_or(clip.sample_rate),
         capture_sample_rate: args.capture_sample_rate,
-        ..SessionConfig::default()
+        chunk_duration_ms: 100,
+        latency_budget_ms: 200,
+        latency_range: 100..=200,
     };
     let (handle, controller) = SessionRuntime::spawn(clip, config);
     let app = SessionApp::new(handle, controller);
     let options = NativeOptions::default();
-    if let Err(err) = eframe::run_native(
+    eframe::run_native(
         "Flowalyzer Pronunciation",
         options,
         Box::new(|_cc| Box::new(app)),
-    ) {
-        eprintln!("failed to launch UI: {err}");
-    }
-    Ok(())
+    )
+    .unwrap();
 }

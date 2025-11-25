@@ -4,8 +4,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tracing::error;
-
 use crate::audio::{assembler, decoder};
 use crate::operations::recipe;
 use crate::types::{AudioChunk, AudioData, FrameCount, FrameIndex, FrameRange, Recipe};
@@ -65,19 +63,8 @@ impl RecordedClip {
 
 /// Load and normalize a clip from disk for recipe application.
 pub fn load_clip(path: &Path) -> Result<RecordedClip> {
-    if !path.exists() {
-        let err_msg = format!("audio file {:?} does not exist", path);
-        error!(path = %path.display(), "{}", err_msg);
-        return Err(PronunciationError::new(err_msg));
-    }
-    let audio = decoder::decode_audio(path).map_err(|err| {
-        let err_msg = err.to_string();
-        error!(path = %path.display(), error = %err_msg, "failed to decode audio file");
-        PronunciationError::new(err_msg)
-    })?;
-    let clip = clip_from_audio(audio)?;
-    validate_clip_duration(&clip)?;
-    Ok(clip)
+    let audio = decoder::decode_audio(path).unwrap();
+    clip_from_audio(audio)
 }
 
 /// Extract the requested range of audio and apply the recipe steps.
