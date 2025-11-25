@@ -81,18 +81,40 @@ impl SessionRuntime {
             tail_seeded: Arc::new(AtomicBool::new(false)),
             capture_builder,
         };
-        let handle = SessionHandle {
-            snapshot_receiver: snapshot_rx,
-            config: config.clone(),
-        };
         let controller = SessionController {
             command_sender: command_tx,
         };
         thread::spawn(move || runtime.run());
+        let initial_snapshot = snapshot_rx.recv().unwrap();
+        let handle = SessionHandle {
+            initial_snapshot,
+            snapshot_receiver: snapshot_rx,
+            config: config.clone(),
+        };
         (handle, controller)
     }
 
     fn run(self) {
+        let initial_alignment = AlignmentReport {
+            reference_energy: Vec::new(),
+            learner_energy: Vec::new(),
+            energy_error: Vec::new(),
+            reference_pitch: Vec::new(),
+            learner_pitch: Vec::new(),
+            similarity_band: Vec::new(),
+            contour_band: Vec::new(),
+            start_frame_idx: 0,
+            end_frame_idx: 0,
+            hop_ms: 0.0,
+            global_time_offset_ms: 0.0,
+            total_duration: 0.0,
+        };
+        let initial_snapshot = SessionSnapshot {
+            alignment: initial_alignment,
+            recording: false,
+            reference_playing: false,
+        };
+        let _ = self.snapshot_sender.send(initial_snapshot);
         let mut recording = false;
         let mut capture: Option<Box<dyn CaptureSource>> = None;
         loop {
@@ -387,6 +409,7 @@ struct PlaybackState {
 }
 
 pub struct SessionHandle {
+    initial_snapshot: SessionSnapshot,
     snapshot_receiver: Receiver<SessionSnapshot>,
     config: SessionConfig,
 }
@@ -404,8 +427,8 @@ impl SessionHandle {
         &self.config
     }
 
-    pub fn initial_snapshot(&self) -> Option<SessionSnapshot> {
-        self.snapshot_receiver.try_recv().ok()
+    pub fn initial_snapshot(&self) -> &SessionSnapshot {
+        &self.initial_snapshot
     }
 }
 

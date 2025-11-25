@@ -14,7 +14,7 @@ const HISTORY_CAPACITY_FRAMES: usize = HISTORY_WINDOW_MS / FRAME_HOP_MS;
 pub struct SessionApp {
     handle: SessionHandle,
     controller: SessionController,
-    snapshot: Option<SessionSnapshot>,
+    snapshot: SessionSnapshot,
     control_error: Option<String>,
     histories: HistoryBuffers,
     reference_ready: bool,
@@ -22,46 +22,40 @@ pub struct SessionApp {
 
 impl SessionApp {
     pub fn new(handle: SessionHandle, controller: SessionController) -> Self {
+        let snapshot = handle.initial_snapshot().clone();
         Self {
-            snapshot: handle.initial_snapshot(),
+            snapshot,
             handle,
             controller,
             control_error: None,
             histories: HistoryBuffers::new(),
-            reference_ready: false,
+            reference_ready: true,
         }
     }
 
     pub fn apply_snapshot(&mut self, snapshot: SessionSnapshot) {
-        let started_recording = match self.snapshot.as_ref() {
-            Some(current) => !current.recording && snapshot.recording,
-            None => snapshot.recording,
-        };
+        let started_recording = !self.snapshot.recording && snapshot.recording;
         if started_recording {
             self.clear_histories();
         }
         self.histories.accumulate(&snapshot.alignment);
-        self.snapshot = Some(snapshot);
-        self.reference_ready = true;
+        self.snapshot = snapshot;
     }
 
     pub fn clear_histories(&mut self) {
         self.histories.clear();
     }
 
-    pub fn snapshot(&self) -> Option<&SessionSnapshot> {
-        self.snapshot.as_ref()
+    pub fn snapshot(&self) -> &SessionSnapshot {
+        &self.snapshot
     }
 
     fn recording(&self) -> bool {
-        self.snapshot.as_ref().map(|s| s.recording).unwrap()
+        self.snapshot.recording
     }
 
     fn reference_playing(&self) -> bool {
-        self.snapshot
-            .as_ref()
-            .map(|s| s.reference_playing)
-            .unwrap()
+        self.snapshot.reference_playing
     }
 
     pub fn config(&self) -> &SessionConfig {
