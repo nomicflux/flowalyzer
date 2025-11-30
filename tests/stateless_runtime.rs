@@ -6,6 +6,7 @@ use flowalyzer::audio::capture::{CaptureBuilder, CaptureConfig, CaptureSource};
 use flowalyzer::pronunciation::features::{FeatureConfig, FeatureExtractor};
 use flowalyzer::pronunciation::session::{SessionConfig, SessionEngine, SessionRuntime};
 use flowalyzer::pronunciation::RecordedClip;
+use flowalyzer::test_support::sine_wave;
 
 #[test]
 fn runtime_spawns_and_shuts_down_without_snapshots_when_never_started() {
@@ -38,13 +39,6 @@ fn start_stop_cycle_exits_cleanly() {
     std::thread::sleep(Duration::from_millis(20));
     controller.stop().unwrap();
     std::thread::sleep(Duration::from_millis(20));
-}
-
-fn sine_wave(sample_rate: u32, frequency: f32, duration_secs: f32) -> Vec<f32> {
-    let total_samples = (sample_rate as f32 * duration_secs) as usize;
-    (0..total_samples)
-        .map(|i| (2.0 * std::f32::consts::PI * frequency * i as f32 / sample_rate as f32).sin())
-        .collect()
 }
 
 struct BufferCapture {

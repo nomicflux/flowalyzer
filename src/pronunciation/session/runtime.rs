@@ -206,7 +206,10 @@ impl SessionRuntime {
             *buffer = remaining;
             let mut staging = self.resampled_buffer.lock().unwrap();
             staging.extend_from_slice(&processed);
-            let required_tail_len = self.required_tail_len();
+            let required_tail_len = {
+                let engine = self.engine.lock().expect("engine poisoned");
+                engine.required_tail_len()
+            };
             while staging.len()
                 >= if self.tail_seeded.load(Ordering::SeqCst) {
                     target_len
@@ -255,11 +258,6 @@ impl SessionRuntime {
             .ok()
             .and_then(|guard| guard.clone())?;
         Some(self.snapshot_internal(alignment, recording))
-    }
-
-    fn required_tail_len(&self) -> usize {
-        let cfg = FeatureConfig::from_sample_rate(self.config.sample_rate);
-        cfg.frame_len_samples - cfg.hop_samples
     }
 
     fn snapshot_internal(&self, alignment: AlignmentReport, recording: bool) -> SessionSnapshot {
@@ -329,6 +327,24 @@ fn required_raw_samples(target_len: usize, input_rate: u32, output_rate: u32) ->
     (target_len as u64 * input_rate as u64).div_ceil(output_rate as u64) as usize
 }
 
+fn resample_to_target(
+    samples: &[f32],
+    input_rate: u32,
+    output_rate: u32,
+    target_len: usize,
+) -> std::result::Result<Vec<f32>, PronunciationError> {
+    let mut output = if input_rate == output_rate {
+        samples.to_vec()
+    } else {
+        linear_resample(samples, input_rate, output_rate)
+            .map_err(|err| PronunciationError::new(err.to_string()))?
+    };
+    if output.len() > target_len {
+        output.truncate(target_len);
+    }
+    Ok(output)
+}
+
 #[allow(dead_code)]
 fn collect_resampled_chunk<F>(
     next_chunk: &mut F,
@@ -350,19 +366,9 @@ where
             }
         }
 
-        let output = if input_rate == output_rate {
-            raw_samples.clone()
-        } else {
-            linear_resample(&raw_samples, input_rate, output_rate)
-                .map_err(|err| PronunciationError::new(err.to_string()))?
-        };
-
+        let output = resample_to_target(&raw_samples, input_rate, output_rate, target_len)?;
         if output.len() >= target_len {
-            let mut chunk = output;
-            if chunk.len() > target_len {
-                chunk.truncate(target_len);
-            }
-            return Ok(Some(chunk));
+            return Ok(Some(output));
         }
 
         let shortfall = target_len - output.len();
@@ -387,12 +393,7 @@ fn collect_resampled_chunk_from_buffer(
         return Ok(None);
     }
     let (to_process, remainder) = buffer.split_at(required);
-    let resampled = if input_rate == output_rate {
-        to_process.to_vec()
-    } else {
-        linear_resample(to_process, input_rate, output_rate)
-            .map_err(|err| PronunciationError::new(err.to_string()))?
-    };
+    let resampled = resample_to_target(to_process, input_rate, output_rate, target_len)?;
     Ok(Some((resampled, remainder.to_vec())))
 }
 
@@ -472,11 +473,10 @@ impl SessionController {
 
 #[cfg(test)]
 mod tests {
-    use std::f32::consts::PI;
-
     use crate::audio::resample::linear_resample;
     use crate::pronunciation::features::FeatureConfig;
     use crate::pronunciation::session::SessionConfig;
+    use crate::test_support::sine_wave;
 
     use super::{
         collect_resampled_chunk, collect_resampled_chunk_from_buffer, required_raw_samples,
@@ -547,17 +547,6 @@ mod tests {
 
     #[test]
     fn capture_pipeline_produces_voiced_pitch() {
-        fn sine_wave(sample_rate: u32, frequency: f32, duration_secs: f32) -> Vec<f32> {
-            let total_samples = (sample_rate as f32 * duration_secs) as usize;
-            (0..total_samples)
-                .map(|i| {
-                    (2.0 * PI * frequency * i as f32 / sample_rate as f32)
-                        .sin()
-                        .clamp(-1.0, 1.0)
-                })
-                .collect()
-        }
-
         let config = SessionConfig {
             chunk_duration_ms: 150,
             ..Default::default()

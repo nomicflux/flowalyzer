@@ -1,40 +1,6 @@
 use crate::pronunciation::features::{ChunkFeatures, ReferenceFeatures};
 use crate::pronunciation::session::AlignmentReport;
 
-#[derive(Debug, Clone, Copy)]
-pub struct StatelessAligner;
-
-impl StatelessAligner {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn align(
-        &self,
-        reference: &ReferenceFeatures,
-        learner: &ChunkFeatures,
-        start_frame_idx: usize,
-        global_offset_ms: f32,
-        sample_rate: u32,
-        hop_samples: usize,
-    ) -> AlignmentReport {
-        align_features(
-            reference,
-            learner,
-            start_frame_idx,
-            global_offset_ms,
-            sample_rate,
-            hop_samples,
-        )
-    }
-}
-
-impl Default for StatelessAligner {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn align_features(
     reference: &ReferenceFeatures,
     learner: &ChunkFeatures,
