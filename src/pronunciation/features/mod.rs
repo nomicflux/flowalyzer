@@ -1,7 +1,5 @@
 const FRAME_LENGTH_SAMPLES_AT_16K: usize = 1024;
 const HOP_SAMPLES_AT_16K: usize = 160; // 10ms at 16kHz
-const MIN_FREQUENCY_HZ: f32 = 80.0;
-const MAX_FREQUENCY_HZ: f32 = 800.0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FeatureConfig {
@@ -123,24 +121,23 @@ fn frame_energy(frame: &[f32]) -> f32 {
 }
 
 fn frame_pitch(frame: &[f32], sample_rate: u32) -> f32 {
-    let min_period = (sample_rate as f32 / MAX_FREQUENCY_HZ) as usize;
-    let max_period = (sample_rate as f32 / MIN_FREQUENCY_HZ) as usize;
-    let mut best_lag = min_period;
-    let mut best_corr = autocorrelation(frame, min_period);
-    for lag in (min_period + 1)..=max_period {
-        let corr = autocorrelation(frame, lag);
-        if corr > best_corr {
-            best_corr = corr;
-            best_lag = lag;
+    let frame_len = frame.len();
+    let mut best_mag = f32::NEG_INFINITY;
+    let mut best_bin = 0usize;
+    for bin in 0..=(frame_len / 2) {
+        let mut real = 0.0;
+        let mut imag = 0.0;
+        let freq = bin as f32 * std::f32::consts::TAU / frame_len as f32;
+        for (idx, sample) in frame.iter().enumerate() {
+            let angle = freq * idx as f32;
+            real += sample * angle.cos();
+            imag -= sample * angle.sin();
+        }
+        let mag_sq = real * real + imag * imag;
+        if mag_sq > best_mag {
+            best_mag = mag_sq;
+            best_bin = bin;
         }
     }
-    sample_rate as f32 / best_lag as f32
-}
-
-fn autocorrelation(frame: &[f32], lag: usize) -> f32 {
-    frame
-        .iter()
-        .zip(frame.iter().skip(lag))
-        .map(|(a, b)| a * b)
-        .sum()
+    best_bin as f32 * sample_rate as f32 / frame_len as f32
 }

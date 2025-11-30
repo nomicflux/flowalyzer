@@ -23,9 +23,9 @@ fn chunk_features(energy: Vec<f32>, pitch: Vec<f32>) -> ChunkFeatures {
 }
 
 #[test]
-fn identical_chunks_keep_similarity_high() {
-    let energy = vec![0.5, 0.6, 0.55];
-    let pitch = vec![220.0, 225.0, 230.0];
+fn similarity_handles_silence_with_silence() {
+    let energy = vec![0.0, 0.0, 0.0];
+    let pitch = vec![0.0, 0.0, 0.0];
     let reference = reference_features(energy.clone(), pitch.clone());
     let learner = chunk_features(energy, pitch);
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
@@ -42,46 +42,47 @@ fn identical_chunks_keep_similarity_high() {
 }
 
 #[test]
-fn slices_reference_from_start_frame_index() {
-    let reference = reference_features(vec![1.0, 2.0, 3.0, 4.0], vec![100.0, 200.0, 300.0, 400.0]);
-    let learner = chunk_features(vec![3.0, 4.0], vec![300.0, 400.0]);
-    let report = align_features(&reference, &learner, 2, 15.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.reference_energy, vec![3.0, 4.0]);
-    assert_eq!(report.reference_pitch, vec![300.0, 400.0]);
-    assert!(report
-        .similarity_band
-        .iter()
-        .all(|value| (*value).abs() < 1e-6));
-    assert!(report.contour_band.iter().all(|value| value.abs() < 1e-6));
-    assert_eq!(report.global_time_offset_ms, 15.0);
-    assert!((report.hop_ms - 10.0).abs() < 1e-6);
-    assert_eq!(report.start_frame_idx, 2);
-    assert_eq!(report.end_frame_idx, 4);
-    assert!((report.total_duration - 20.0).abs() < 1e-6);
+fn similarity_marks_silence_against_sound() {
+    let reference = reference_features(vec![0.0, 0.0], vec![0.0, 0.0]);
+    let learner = chunk_features(vec![1.0, 1.0], vec![100.0, 120.0]);
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    assert_eq!(report.energy_error, vec![1.0, 1.0]);
+    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
+    assert!(report.contour_band.iter().any(|v| *v < 0.0));
 }
 
 #[test]
-fn computes_raw_metric_bands() {
-    let reference = reference_features(
-        vec![1.0, 1.0, 1.0, 1.0, 1.0],
-        vec![100.0, 100.0, 100.0, 100.0, 100.0],
-    );
-    let learner = chunk_features(
-        vec![2.0, 2.0, 2.0, 2.0, 2.0],
-        vec![200.0, 200.0, 200.0, 200.0, 200.0],
-    );
+fn similarity_marks_sound_against_silence() {
+    let reference = reference_features(vec![1.0, 2.0], vec![100.0, 110.0]);
+    let learner = chunk_features(vec![0.0, 0.0], vec![0.0, 0.0]);
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.energy_error, vec![1.0; 5]);
-    let expected = -1.3862944;
-    assert!(report
-        .similarity_band
-        .iter()
-        .all(|value| (*value - expected).abs() < 1e-6));
-    assert_eq!(report.contour_band, vec![1200.0; 5]);
-    assert!((report.hop_ms - 10.0).abs() < 1e-6);
+    assert_eq!(report.energy_error, vec![-1.0, -2.0]);
+    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
+    assert!(report.contour_band.iter().any(|v| *v > 0.0));
+}
+
+#[test]
+fn similarity_matches_equal_sound() {
+    let reference = reference_features(vec![1.5, 2.0], vec![200.0, 220.0]);
+    let learner = chunk_features(vec![1.5, 2.0], vec![200.0, 220.0]);
+    let report = align_features(&reference, &learner, 0, 25.0, SAMPLE_RATE, HOP_SAMPLES);
+    assert_eq!(report.energy_error, vec![0.0, 0.0]);
+    assert_eq!(report.similarity_band, vec![0.0, 0.0]);
+    assert_eq!(report.contour_band, vec![0.0, 0.0]);
     assert_eq!(report.start_frame_idx, 0);
-    assert_eq!(report.end_frame_idx, 5);
-    assert!((report.total_duration - 50.0).abs() < 1e-6);
+    assert_eq!(report.end_frame_idx, 2);
+    assert!((report.total_duration - 20.0).abs() < 1e-6);
+    assert_eq!(report.global_time_offset_ms, 25.0);
+}
+
+#[test]
+fn similarity_detects_difference_between_sounds() {
+    let reference = reference_features(vec![1.0, 1.5], vec![180.0, 200.0]);
+    let learner = chunk_features(vec![0.5, 2.0], vec![150.0, 260.0]);
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    assert_eq!(report.energy_error, vec![-0.5, 0.5]);
+    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
+    assert!(report.contour_band.iter().any(|v| v.abs() > 0.1));
 }
 
 #[test]

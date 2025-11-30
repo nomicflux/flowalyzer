@@ -50,17 +50,30 @@ fn compute_similarity(
     reference_pitch: &[f32],
     learner_pitch: &[f32],
 ) -> Vec<f32> {
+    let learner_log_pitch: Vec<f32> = learner_pitch.iter().map(|p| (1.0 + p).ln()).collect();
+    let reference_log_pitch: Vec<f32> = reference_pitch.iter().map(|p| (1.0 + p).ln()).collect();
+    let pitch_offset = mean(&learner_log_pitch) - mean(&reference_log_pitch);
+
     (0..reference_energy.len())
         .map(|index| {
-            let energy_ratio = (learner_energy[index] / reference_energy[index]).ln().abs();
-            let pitch_ratio = (learner_pitch[index] / reference_pitch[index]).ln().abs();
-            -(energy_ratio + pitch_ratio)
+            let energy_delta = (learner_energy[index] - reference_energy[index]).abs();
+            let pitch_delta =
+                (learner_log_pitch[index] - pitch_offset - reference_log_pitch[index]).abs();
+            -(energy_delta + pitch_delta)
         })
         .collect()
 }
 
 fn compute_contour_band(reference: &[f32], learner: &[f32]) -> Vec<f32> {
+    let learner_log_pitch: Vec<f32> = learner.iter().map(|p| (1.0 + p).ln()).collect();
+    let reference_log_pitch: Vec<f32> = reference.iter().map(|p| (1.0 + p).ln()).collect();
+    let pitch_offset = mean(&learner_log_pitch) - mean(&reference_log_pitch);
+
     (0..learner.len())
-        .map(|i| 1200.0 * (learner[i] / reference[i]).log2())
+        .map(|i| learner_log_pitch[i] - pitch_offset - reference_log_pitch[i])
         .collect()
+}
+
+fn mean(values: &[f32]) -> f32 {
+    values.iter().sum::<f32>() / values.len() as f32
 }
