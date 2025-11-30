@@ -38,19 +38,41 @@ impl SessionEngine {
         let mut window = Vec::with_capacity(learner_tail.len() + learner_samples.len());
         window.extend_from_slice(learner_tail);
         window.extend_from_slice(learner_samples);
+
+        // Calculate phase offset: where does the window start relative to the global grid?
+        // window_start = global_sample_counter - tail_len
+        // phase_offset = window_start % hop
+        let tail_len = learner_tail.len();
+        let hop = self.feature_cfg.hop_samples;
+        let window_start_global = self
+            .global_sample_counter
+            .checked_sub(tail_len as u64)
+            .unwrap();
+        let phase_offset = (window_start_global % hop as u64) as usize;
+
         let learner_features = self.extractor.extract_chunk(
             learner_tail,
             learner_samples,
             self.sample_rate,
             self.feature_cfg,
+            phase_offset,
         );
 
-        let start_frame_idx =
-            (self.global_sample_counter / self.feature_cfg.hop_samples as u64) - 1;
+        // Calculate start_frame_idx based on the first extracted frame.
+        // Global pos of a frame starting at `chunk_start` (relative to chunk anchor defined in extract_chunk):
+        // G_pos = global_sample_counter + chunk_start - hop.
+        // See derivation in thought process.
+        let start_frame_idx = if let Some(&first_start) = learner_features.frame_starts.first() {
+            let global_pos = (self.global_sample_counter as i64 + first_start as i64 - hop as i64) as u64;
+            (global_pos / hop as u64) as usize
+        } else {
+            (self.global_sample_counter / hop as u64) as usize
+        };
+
         let report = align_features(
             &self.reference_features,
             &learner_features,
-            start_frame_idx as usize,
+            start_frame_idx,
             self.global_offset_ms(),
             self.sample_rate,
             self.feature_cfg.hop_samples,

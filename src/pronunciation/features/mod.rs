@@ -29,7 +29,7 @@ pub struct ReferenceFeatures {
 pub struct ChunkFeatures {
     pub energy: Vec<f32>,
     pub pitch: Vec<f32>,
-    pub frame_starts: Vec<usize>,
+    pub frame_starts: Vec<isize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -55,10 +55,13 @@ impl FeatureExtractor {
         starts.push(0);
         energy.push(frame_energy(frame));
         pitch.push(frame_pitch(frame, sample_rate));
-        for start in (hop..samples.len()).step_by(hop) {
-            if start + frame_len > samples.len() {
-                break;
-            }
+
+        // Loop for subsequent frames.
+        // Range is 0..=(samples.len() - frame_len) to ensure we only take full frames.
+        // If samples.len() < frame_len, this subtraction panics (natural panic).
+        // But we already panicked above if that was the case.
+        // We start at hop because 0 is already done.
+        for start in (hop..=(samples.len() - frame_len)).step_by(hop) {
             let frame = &samples[start..start + frame_len];
             starts.push(start);
             energy.push(frame_energy(frame));
@@ -77,6 +80,7 @@ impl FeatureExtractor {
         chunk: &[f32],
         sample_rate: u32,
         cfg: FeatureConfig,
+        phase_offset: usize,
     ) -> ChunkFeatures {
         let mut window = Vec::with_capacity(prev_tail.len() + chunk.len());
         window.extend_from_slice(prev_tail);
@@ -88,16 +92,32 @@ impl FeatureExtractor {
         let frame_len = cfg.frame_len_samples;
         let hop = cfg.hop_samples;
         let tail_len = prev_tail.len() as isize;
-        for start in (0..=window.len().saturating_sub(frame_len)).step_by(hop) {
-            let frame = &window[start..start + frame_len];
-            let chunk_start = start as isize - (tail_len - hop as isize);
-            if chunk_start >= 0 {
-                frame_starts.push(chunk_start as usize);
-                energy.push(frame_energy(frame));
-                pitch.push(frame_pitch(frame, sample_rate));
+
+        // Calculate the first frame start index relative to the window that satisfies the global grid.
+        // The window starts at `global_counter - tail_len`.
+        // We want `(global_start + s) % hop == 0`.
+        // We are given `phase_offset` which should be `(global_counter - tail_len) % hop`.
+        // So `(phase_offset + s) % hop == 0` => `s = (hop - phase_offset) % hop`.
+        let start_offset = (hop - phase_offset) % hop;
+
+        // Ensure we don't iterate if window is too small (natural panic via range if we forced it,
+        // but here we just want valid frames).
+        // Actually, if window is too small for *any* frame, we return empty features?
+        // The plan says "Invalid inputs fail where slices/divisions naturally panic".
+        // But `extract_chunk` might validly return empty if the chunk is tiny and doesn't complete a frame.
+        // So we iterate valid frames.
+
+        if window.len() >= frame_len {
+            for start in (start_offset..=(window.len() - frame_len)).step_by(hop) {
+                let frame = &window[start..start + frame_len];
+                let chunk_start = start as isize - (tail_len - hop as isize);
+                if chunk_start >= 0 {
+                    frame_starts.push(chunk_start);
+                    energy.push(frame_energy(frame));
+                    pitch.push(frame_pitch(frame, sample_rate));
+                }
             }
         }
-
         ChunkFeatures {
             energy,
             pitch,
@@ -121,23 +141,38 @@ fn frame_energy(frame: &[f32]) -> f32 {
 }
 
 fn frame_pitch(frame: &[f32], sample_rate: u32) -> f32 {
-    let frame_len = frame.len();
-    let mut best_mag = f32::NEG_INFINITY;
-    let mut best_bin = 0usize;
-    for bin in 0..=(frame_len / 2) {
-        let mut real = 0.0;
-        let mut imag = 0.0;
-        let freq = bin as f32 * std::f32::consts::TAU / frame_len as f32;
-        for (idx, sample) in frame.iter().enumerate() {
-            let angle = freq * idx as f32;
-            real += sample * angle.cos();
-            imag -= sample * angle.sin();
+    let len = frame.len();
+    // Autocorrelation
+    // We look for the lag with the highest correlation in the valid pitch range.
+    // Valid range: 50Hz to 500Hz (typical speech).
+    // Lag = sample_rate / freq.
+    let min_lag = (sample_rate as f32 / 500.0) as usize;
+    let max_lag = (sample_rate as f32 / 50.0) as usize;
+
+    // Ensure lags are within frame bounds (natural panic if frame is tiny, but frame_len is usually 1024)
+    // If frame is smaller than max_lag, we can't detect 50Hz.
+    // We'll just clamp the search range to the frame size naturally.
+    let search_end = max_lag.min(len / 2);
+    let search_start = min_lag.min(search_end);
+
+    let mut best_corr = -1.0;
+    let mut best_lag = 0;
+
+    for lag in search_start..=search_end {
+        let mut corr = 0.0;
+        // Simple non-normalized autocorrelation
+        for i in 0..(len - lag) {
+            corr += frame[i] * frame[i + lag];
         }
-        let mag_sq = real * real + imag * imag;
-        if mag_sq > best_mag {
-            best_mag = mag_sq;
-            best_bin = bin;
+        if corr > best_corr {
+            best_corr = corr;
+            best_lag = lag;
         }
     }
-    best_bin as f32 * sample_rate as f32 / frame_len as f32
+
+    if best_lag > 0 {
+        sample_rate as f32 / best_lag as f32
+    } else {
+        0.0 // No pitch detected
+    }
 }

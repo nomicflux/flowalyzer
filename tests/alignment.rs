@@ -18,7 +18,7 @@ fn chunk_features(energy: Vec<f32>, pitch: Vec<f32>) -> ChunkFeatures {
     ChunkFeatures {
         energy: energy.into_iter().take(aligned_len).collect(),
         pitch: pitch.into_iter().take(aligned_len).collect(),
-        frame_starts: (0..aligned_len).collect(),
+        frame_starts: (0..aligned_len as isize).collect(),
     }
 }
 

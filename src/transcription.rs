@@ -44,12 +44,6 @@ impl TranscriptionSettings {
 }
 
 /// Transcribe audio to text with word-level timing
-///
-/// # Arguments
-/// * `audio` - The audio data to transcribe
-///
-/// # Returns
-/// Transcript with segments containing text and timing information
 pub fn transcribe_audio(audio: &AudioData, settings: &TranscriptionSettings) -> Result<Transcript> {
     let ctx = WhisperContext::new_with_params(
         &settings.model_path,
@@ -76,16 +70,13 @@ pub fn transcribe_audio(audio: &AudioData, settings: &TranscriptionSettings) -> 
         .full(params, &audio.samples)
         .context("Failed to transcribe audio")?;
 
-    // Extract segments with timing using iterator
     let mut segments = Vec::new();
-
     for segment in state.as_iter() {
         let text = segment
             .to_str()
             .context("Failed to get segment text")?
             .to_string();
 
-        // Timestamps are in centiseconds (10s of milliseconds), convert to seconds
         let start_time = segment.start_timestamp() as f64 / 100.0;
         let end_time = segment.end_timestamp() as f64 / 100.0;
         segments.push(Segment {
@@ -106,11 +97,7 @@ mod tests {
     #[test]
     #[ignore] // Requires model file to be downloaded
     fn test_transcribe_audio() {
-        // This test requires a downloaded Whisper model
-        // Run: wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin -P ./models/
-
-        // Create a simple test audio (1 second of 440Hz tone)
-        let sample_rate = 16000; // Whisper expects 16kHz
+        let sample_rate = 16000;
         let duration = 1.0;
         let num_samples = (sample_rate as f64 * duration) as usize;
 
@@ -126,9 +113,6 @@ mod tests {
             frame_range: FrameRange::new(FrameIndex::ZERO, FrameCount::from(num_samples)),
         };
 
-        // This will fail without the model, but shows the API usage
         let _result = transcribe_audio(&audio, &TranscriptionSettings::default());
-        // If model exists, verify we got a transcript
-        // assert!(result.is_ok());
     }
 }

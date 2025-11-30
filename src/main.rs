@@ -4,7 +4,7 @@ mod transcription;
 use flowalyzer::{audio, chunking, operations, types};
 use std::path::PathBuf;
 use std::{fs, path::Path};
-use transcription::TranscriptionSettings;
+use transcription::{transcribe_audio, TranscriptionSettings};
 
 /// Flowalyzer - Audio chunking and manipulation tool
 ///
@@ -230,8 +230,7 @@ fn transcribe_with_logging(
     settings: &TranscriptionSettings,
 ) -> Result<types::Transcript> {
     println!("\n2. Transcribing audio with Whisper...");
-    let transcript =
-        transcription::transcribe_audio(audio, settings).context("Failed to transcribe audio")?;
+    let transcript = transcribe_audio(audio, settings).context("Failed to transcribe audio")?;
     println!("   Found {} segments", transcript.segments.len());
     log_transcript_preview(&transcript);
     Ok(transcript)

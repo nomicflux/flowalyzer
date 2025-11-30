@@ -148,7 +148,7 @@ fn non_multiple_tail_preserves_phase_and_state() {
         w
     };
     let expected_tail = window[window.len() - required_tail_len..].to_vec();
-    let expected_start = (required_tail_len as u64 / feature_cfg.hop_samples as u64) - 1;
+    let expected_start = required_tail_len as u64 / feature_cfg.hop_samples as u64;
     let expected_offset_ms = (required_tail_len as f32 / config.sample_rate as f32) * 1_000.0;
 
     let first_report = engine.process_chunk(&chunk);
@@ -164,7 +164,7 @@ fn non_multiple_tail_preserves_phase_and_state() {
     assert_eq!(engine.tail_samples(), expected_tail.as_slice());
 
     let second_expected_start =
-        (engine.global_sample_counter() / feature_cfg.hop_samples as u64) - 1;
+        engine.global_sample_counter() / feature_cfg.hop_samples as u64;
     let second_expected_offset_ms =
         (engine.global_sample_counter() as f32 / config.sample_rate as f32) * 1_000.0;
     let second_report = engine.process_chunk(&chunk);
