@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::Parser;
-use flowalyzer::{audio, chunking, operations, transcription, types};
+mod transcription;
+use flowalyzer::{audio, chunking, operations, types};
 use std::path::PathBuf;
 use std::{fs, path::Path};
 use transcription::TranscriptionSettings;
@@ -114,8 +115,6 @@ impl Args {
             settings.language = Some(trimmed.to_string());
             settings.detect_language = false;
         }
-
-        settings.apply_model_defaults();
 
         Ok(settings)
     }
@@ -630,8 +629,8 @@ mod tests {
 
         let settings = args.transcription_settings().unwrap();
         assert_eq!(settings.model_path, "/tmp/ggml-base.en.bin");
-        assert_eq!(settings.language.as_deref(), Some("en"));
-        assert!(!settings.detect_language);
+        assert_eq!(settings.language.as_deref(), None);
+        assert!(settings.detect_language);
     }
 
     #[test]

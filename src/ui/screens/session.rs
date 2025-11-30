@@ -75,7 +75,10 @@ impl SessionApp {
             } else {
                 "Start Recording"
             };
-            if ui.button(label).clicked() {
+            if ui
+                .add_enabled(!self.reference_playing(), egui::Button::new(label))
+                .clicked()
+            {
                 self.control_error = if self.recording() {
                     self.controller.stop().err().map(|err| err.to_string())
                 } else {
@@ -83,7 +86,21 @@ impl SessionApp {
                 };
             }
 
-            if ui.button("Replay Reference").clicked() {
+            if ui
+                .add_enabled(!self.recording(), egui::Button::new("Shadow"))
+                .clicked()
+            {
+                self.control_error = if self.recording() || self.reference_playing() {
+                    Some("Shadow unavailable during recording or playback".to_string())
+                } else {
+                    self.controller.shadow().err().map(|err| err.to_string())
+                };
+            }
+
+            if ui
+                .add_enabled(!self.recording(), egui::Button::new("Replay Reference"))
+                .clicked()
+            {
                 if let Err(err) = self.controller.replay_reference() {
                     self.control_error = Some(err.to_string());
                 }

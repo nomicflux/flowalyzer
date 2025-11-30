@@ -28,7 +28,8 @@ fn runtime_spawns_and_shuts_down_without_snapshots_when_never_started() {
 fn start_stop_cycle_exits_cleanly() {
     let clip = RecordedClip::from_samples(vec![0.0; 16_000], 16_000);
     let config = SessionConfig::default();
-    let (_handle, controller) = SessionRuntime::spawn(clip, config);
+    let builder = Arc::new(BufferCaptureBuilder::new(Vec::new(), config.sample_rate));
+    let (_handle, controller) = SessionRuntime::spawn_with_capture_builder(clip, config, builder);
 
     controller.start().unwrap();
     std::thread::sleep(Duration::from_millis(20));
@@ -323,4 +324,68 @@ fn processing_stops_naturally_when_reference_exhausted() {
             "all snapshots must have real alignment data"
         );
     }
+}
+
+#[test]
+fn shadowing_aligns_capture_and_reference() {
+    let config = SessionConfig {
+        chunk_duration_ms: 150,
+        ..Default::default()
+    };
+    let reference = sine_wave(config.sample_rate, 220.0, 1.0);
+    let clip = RecordedClip::from_samples(reference, config.sample_rate);
+    let device_rate = 48_000;
+    let capture_signal = sine_wave(device_rate, 220.0, 1.0);
+    let device_chunk = 480;
+    let chunks: Vec<Vec<f32>> = capture_signal
+        .chunks(device_chunk)
+        .map(|c| c.to_vec())
+        .collect();
+    let builder = Arc::new(BufferCaptureBuilder::new(chunks, device_rate));
+    let (handle, controller) =
+        SessionRuntime::spawn_with_capture_builder(clip, config.clone(), builder);
+
+    controller.shadow().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut snapshots = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let batch = handle.drain_snapshots();
+        snapshots.extend(batch.into_iter().filter(|s| s.recording));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let best = snapshots
+        .into_iter()
+        .min_by(|a, b| {
+            let a_err = a
+                .alignment
+                .energy_error
+                .iter()
+                .map(|v| v.abs())
+                .fold(f32::INFINITY, f32::min);
+            let b_err = b
+                .alignment
+                .energy_error
+                .iter()
+                .map(|v| v.abs())
+                .fold(f32::INFINITY, f32::min);
+            a_err
+                .partial_cmp(&b_err)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("expected snapshots during shadowing");
+    let alignment = best.alignment;
+    assert!(
+        alignment.energy_error.iter().all(|v| v.is_finite()),
+        "energy error should be finite"
+    );
+    assert!(
+        alignment.similarity_band.iter().all(|v| v.is_finite()),
+        "similarity should be finite"
+    );
+    assert!(
+        alignment.contour_band.iter().all(|v| v.is_finite()),
+        "contour should be finite"
+    );
+    controller.stop().unwrap();
+    controller.shutdown().unwrap();
 }

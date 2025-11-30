@@ -4,6 +4,5 @@ pub mod config;
 pub mod operations;
 pub mod pronunciation;
 pub mod test_support;
-pub mod transcription;
 pub mod types;
 pub mod ui;

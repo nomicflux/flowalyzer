@@ -22,6 +22,7 @@ thread_local! {
 pub enum SessionCommand {
     Start,
     Stop,
+    Shadow,
     ReplayReference,
     StopReplay,
     Shutdown,
@@ -40,6 +41,7 @@ pub struct SessionRuntime {
     resampled_buffer: Arc<Mutex<Vec<f32>>>,
     tail_seeded: Arc<AtomicBool>,
     capture_builder: Arc<dyn CaptureBuilder>,
+    shadowing: bool,
 }
 
 impl SessionRuntime {
@@ -80,6 +82,7 @@ impl SessionRuntime {
             resampled_buffer: Arc::new(Mutex::new(Vec::new())),
             tail_seeded: Arc::new(AtomicBool::new(false)),
             capture_builder,
+            shadowing: false,
         };
         let controller = SessionController {
             command_sender: command_tx,
@@ -95,7 +98,7 @@ impl SessionRuntime {
         (handle, controller)
     }
 
-    fn run(self) {
+    fn run(mut self) {
         let initial_alignment = AlignmentReport {
             reference_energy: Vec::new(),
             learner_energy: Vec::new(),
@@ -121,6 +124,7 @@ impl SessionRuntime {
         loop {
             match self.command_receiver.try_recv() {
                 Ok(SessionCommand::Start) => {
+                    self.shadowing = false;
                     recording = true;
                     if let Some(mut active) = capture.take() {
                         active.stop();
@@ -137,6 +141,7 @@ impl SessionRuntime {
                     }
                 }
                 Ok(SessionCommand::Stop) => {
+                    self.shadowing = false;
                     recording = false;
                     if let Some(mut active) = capture.take() {
                         active.stop();
@@ -144,9 +149,28 @@ impl SessionRuntime {
                     Self::clear_buffer(&self.capture_buffer);
                     Self::clear_buffer(&self.resampled_buffer);
                     self.tail_seeded.store(false, Ordering::SeqCst);
+                    self.stop_reference_playback();
                     if let Some(snapshot) = self.snapshot_from_last(false) {
                         let _ = self.snapshot_sender.send(snapshot);
                     }
+                }
+                Ok(SessionCommand::Shadow) => {
+                    if let Some(mut active) = capture.take() {
+                        active.stop();
+                    }
+                    self.stop_reference_playback();
+                    recording = true;
+                    Self::clear_buffer(&self.capture_buffer);
+                    Self::clear_buffer(&self.resampled_buffer);
+                    self.tail_seeded.store(false, Ordering::SeqCst);
+                    capture = Some(self.start_capture());
+                    if let Ok(mut engine) = self.engine.lock() {
+                        engine.reset();
+                    }
+                    if let Ok(mut last) = self.last_alignment.lock() {
+                        *last = None;
+                    }
+                    self.shadowing = true;
                 }
                 Ok(SessionCommand::Shutdown) => {
                     if let Some(mut active) = capture.take() {
@@ -170,7 +194,20 @@ impl SessionRuntime {
                 }
             }
 
-            self.poll_playback_completion();
+            let playback_finished = self.poll_playback_completion();
+            if playback_finished && self.shadowing {
+                recording = false;
+                self.shadowing = false;
+                if let Some(mut active) = capture.take() {
+                    active.stop();
+                }
+                Self::clear_buffer(&self.capture_buffer);
+                Self::clear_buffer(&self.resampled_buffer);
+                self.tail_seeded.store(false, Ordering::SeqCst);
+                if let Some(snapshot) = self.snapshot_from_last(false) {
+                    let _ = self.snapshot_sender.send(snapshot);
+                }
+            }
             thread::sleep(Duration::from_millis(10));
         }
     }
@@ -223,6 +260,9 @@ impl SessionRuntime {
                     *staging = staging[required_tail_len + target_len..].to_vec();
                     if let Ok(mut engine) = self.engine.lock() {
                         engine.seed_tail(&tail);
+                        if self.shadowing {
+                            self.start_reference_playback();
+                        }
                         let report = engine.process_chunk(&chunk);
                         if let Ok(mut last) = self.last_alignment.lock() {
                             *last = Some(report.clone());
@@ -296,9 +336,9 @@ impl SessionRuntime {
         }
     }
 
-    fn poll_playback_completion(&self) {
+    fn poll_playback_completion(&self) -> bool {
         if !self.reference_playing.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
         let finished = {
             let guard = self.playback_state.lock().unwrap();
@@ -314,6 +354,7 @@ impl SessionRuntime {
                 cell.borrow_mut().take();
             });
         }
+        finished
     }
 
     fn clear_buffer(buffer: &Arc<Mutex<Vec<f32>>>) {
@@ -449,6 +490,12 @@ impl SessionController {
     pub fn stop(&self) -> Result<()> {
         self.command_sender
             .send(SessionCommand::Stop)
+            .map_err(|_| PronunciationError::new("runtime disconnected"))
+    }
+
+    pub fn shadow(&self) -> Result<()> {
+        self.command_sender
+            .send(SessionCommand::Shadow)
             .map_err(|_| PronunciationError::new("runtime disconnected"))
     }
 

@@ -1,7 +1,5 @@
 //! Transcription module - converts audio to text with timing using Whisper
-//!
-//! Uses whisper-rs to transcribe audio and extract word-level timing data.
-//! This enables linguistic boundary detection for intelligent chunking.
+//! Used only by the Flowalyzer binary.
 
 use crate::types::{AudioData, Granularity, Segment, Transcript};
 use anyhow::{Context, Result};
@@ -23,24 +21,15 @@ impl Default for TranscriptionSettings {
     fn default() -> Self {
         let model_path = std::env::var("WHISPER_MODEL_PATH")
             .unwrap_or_else(|_| "./models/ggml-base.bin".to_string());
-        let mut settings = Self {
+        Self {
             model_path,
             language: None,
             detect_language: true,
-        };
-        settings.apply_model_defaults();
-        settings
+        }
     }
 }
 
 impl TranscriptionSettings {
-    pub fn apply_model_defaults(&mut self) {
-        if self.language.is_none() && self.detect_language && self.is_english_only_model() {
-            self.language = Some("en".to_string());
-            self.detect_language = false;
-        }
-    }
-
     pub fn is_english_only_model(&self) -> bool {
         Self::path_is_english_only(&self.model_path)
     }
@@ -65,7 +54,8 @@ pub fn transcribe_audio(audio: &AudioData, settings: &TranscriptionSettings) -> 
     let ctx = WhisperContext::new_with_params(
         &settings.model_path,
         WhisperContextParameters::default(),
-    ).context("Failed to load Whisper model. Download with: wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin -P ./models/")?;
+    )
+    .context("Failed to load Whisper model. Download with: wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin -P ./models/")?;
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_print_special(false);
@@ -75,6 +65,7 @@ pub fn transcribe_audio(audio: &AudioData, settings: &TranscriptionSettings) -> 
     params.set_translate(false);
     match settings.language.as_deref() {
         Some(language) => params.set_language(Some(language)),
+        None if settings.detect_language => params.set_language(None),
         None => params.set_language(None),
     }
 
