@@ -283,9 +283,6 @@ impl SessionRuntime {
                 });
                 self.reference_playing.store(true, Ordering::SeqCst);
                 *self.playback_state.lock().unwrap() = Some(PlaybackState { sink: sink_arc });
-                if let Some(snapshot) = self.snapshot_from_last(false) {
-                    let _ = self.snapshot_sender.send(snapshot);
-                }
             }
         }
     }
@@ -297,9 +294,6 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            if let Some(snapshot) = self.snapshot_from_last(false) {
-                let _ = self.snapshot_sender.send(snapshot);
-            }
         }
     }
 
@@ -320,9 +314,6 @@ impl SessionRuntime {
             PLAYBACK_STREAM.with(|cell| {
                 cell.borrow_mut().take();
             });
-            if let Some(snapshot) = self.snapshot_from_last(false) {
-                let _ = self.snapshot_sender.send(snapshot);
-            }
         }
     }
 
