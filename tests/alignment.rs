@@ -86,16 +86,7 @@ fn similarity_detects_difference_between_sounds() {
 }
 
 #[test]
-#[should_panic]
-fn panics_when_reference_slice_is_out_of_range() {
-    let reference = reference_features(vec![0.1, 0.2], vec![200.0, 210.0]);
-    let learner = chunk_features(vec![0.1], vec![200.0]);
-    let _ = align_features(&reference, &learner, 2, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-}
-
-#[test]
-#[should_panic]
-fn panics_on_pitch_length_mismatch() {
+fn truncates_on_pitch_length_mismatch() {
     let reference = flowalyzer::pronunciation::features::ReferenceFeatures {
         energy: vec![1.0, 1.0],
         pitch: vec![100.0, 100.0],
@@ -106,5 +97,47 @@ fn panics_on_pitch_length_mismatch() {
         pitch: vec![200.0, 200.0],
         frame_starts: vec![0, 1],
     };
-    let _ = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    assert_eq!(report.reference_energy.len(), 1);
+    assert_eq!(report.reference_pitch.len(), 1);
+    assert_eq!(report.learner_energy.len(), 1);
+    assert_eq!(report.learner_pitch.len(), 1);
+}
+
+#[test]
+fn gracefully_truncates_when_reference_exhausted() {
+    // Reference shorter than learner slice starting near the end; should not panic.
+    let reference = reference_features(vec![0.1, 0.2, 0.3, 0.4], vec![200.0, 210.0, 220.0, 230.0]);
+    let learner = chunk_features(vec![0.5, 0.6, 0.7], vec![205.0, 215.0, 225.0]);
+    let report = align_features(&reference, &learner, 3, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    assert_eq!(
+        report.start_frame_idx, 3,
+        "should keep requested start within reference length"
+    );
+    assert_eq!(
+        report.end_frame_idx, 4,
+        "end_frame_idx should cap at reference length"
+    );
+    assert_eq!(
+        report.reference_energy.len(),
+        1,
+        "only remaining reference frames should be used"
+    );
+    assert_eq!(
+        report.learner_energy.len(),
+        1,
+        "learner frames should be truncated to match reference availability"
+    );
+    assert_eq!(
+        report.total_duration,
+        report.hop_ms * report.reference_energy.len() as f32
+    );
+    assert!(
+        report
+            .similarity_band
+            .iter()
+            .all(|v| v.is_finite()),
+        "similarity values should remain finite after truncation"
+    );
 }

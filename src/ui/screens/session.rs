@@ -445,8 +445,7 @@ mod tests {
         SessionApp::new(handle, controller)
     }
 
-    fn report_with_value(value: f32) -> AlignmentReport {
-        let frame_count = HISTORY_CAPACITY_FRAMES / 2;
+    fn report_with_length(value: f32, frame_count: usize) -> AlignmentReport {
         let hop_ms = FRAME_HOP_MS as f32;
         AlignmentReport {
             reference_energy: vec![value; frame_count],
@@ -473,12 +472,27 @@ mod tests {
     }
 
     #[test]
-    fn histories_trim_to_window() {
+    fn histories_accumulate_full_reference_span() {
         let mut app = dummy_app();
-        for _ in 0..3 {
-            let snapshot = snapshot_with_alignment(report_with_value(1.0), false);
-            app.apply_snapshot(snapshot);
-        }
+        let frames = 450; // 4.5s at 10ms hop
+        let snapshot = snapshot_with_alignment(report_with_length(1.0, frames), false);
+        app.apply_snapshot(snapshot);
+
+        assert_eq!(frames, app.histories.reference_energy.len());
+        assert_eq!(frames, app.histories.learner_energy.len());
+        assert_eq!(frames, app.histories.reference_pitch.len());
+        assert_eq!(frames, app.histories.learner_pitch.len());
+        assert_eq!(frames, app.histories.similarity.len());
+        assert_eq!(frames, app.histories.contour.len());
+    }
+
+    #[test]
+    fn histories_trim_when_exceeding_window() {
+        let mut app = dummy_app();
+        let frames = HISTORY_CAPACITY_FRAMES + 50;
+        let snapshot = snapshot_with_alignment(report_with_length(0.5, frames), false);
+        app.apply_snapshot(snapshot);
+
         assert_eq!(
             HISTORY_CAPACITY_FRAMES,
             app.histories.reference_energy.len()
@@ -486,25 +500,39 @@ mod tests {
     }
 
     #[test]
-    fn clear_histories_resets_state() {
+    fn apply_snapshot_accumulates_across_chunks_while_recording() {
         let mut app = dummy_app();
-        let snapshot = snapshot_with_alignment(report_with_value(0.5), false);
-        app.apply_snapshot(snapshot);
-        app.clear_histories();
-        assert!(app.histories.reference_energy.is_empty());
-        assert!(app.histories.similarity.is_empty());
+        let first = snapshot_with_alignment(report_with_length(0.3, 200), true);
+        let second = snapshot_with_alignment(report_with_length(0.4, 220), true);
+
+        app.apply_snapshot(first);
+        app.apply_snapshot(second);
+
+        let expected = 200 + 220;
+        assert_eq!(expected, app.histories.reference_energy.len());
+        assert_eq!(expected, app.histories.learner_energy.len());
     }
 
     #[test]
-    fn histories_clear_on_restart() {
+    fn apply_snapshot_clears_on_recording_restart() {
         let mut app = dummy_app();
-        let snapshot = snapshot_with_alignment(report_with_value(0.5), false);
-        app.apply_snapshot(snapshot);
-        let restarted = snapshot_with_alignment(report_with_value(0.5), true);
+        let initial = snapshot_with_alignment(report_with_length(0.7, 180), true);
+        let stopped = snapshot_with_alignment(report_with_length(0.2, 40), false);
+        let restarted = snapshot_with_alignment(report_with_length(0.5, 150), true);
+
+        app.apply_snapshot(initial);
+        app.apply_snapshot(stopped);
+        assert!(
+            app.histories.reference_energy.len() >= 180,
+            "should retain accumulated frames before restart"
+        );
+
         app.apply_snapshot(restarted);
         assert_eq!(
-            HISTORY_CAPACITY_FRAMES / 2,
-            app.histories.reference_energy.len()
+            150,
+            app.histories.reference_energy.len(),
+            "restart should clear histories and accept new chunk length"
         );
+        assert_eq!(150, app.histories.learner_energy.len());
     }
 }

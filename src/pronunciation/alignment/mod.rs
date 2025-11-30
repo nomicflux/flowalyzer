@@ -9,32 +9,57 @@ pub fn align_features(
     sample_rate: u32,
     hop_samples: usize,
 ) -> AlignmentReport {
-    let end_frame_idx = start_frame_idx + learner.energy.len();
-    let reference_energy = reference.energy[start_frame_idx..end_frame_idx].to_vec();
-    let reference_pitch = reference.pitch[start_frame_idx..end_frame_idx].to_vec();
+    let ref_len = reference.energy.len().min(reference.pitch.len());
+    let effective_start = start_frame_idx.min(ref_len);
+    let available_ref = ref_len.saturating_sub(effective_start);
+    let learner_len = learner
+        .energy
+        .len()
+        .min(learner.pitch.len())
+        .min(available_ref);
 
-    let energy_error = compute_energy_error(&reference_energy, &learner.energy);
-    let similarity = compute_similarity(
-        &reference_energy,
-        &learner.energy,
-        &reference_pitch,
-        &learner.pitch,
-    );
-    let contour = compute_contour_band(&reference_pitch, &learner.pitch);
+    if learner_len == 0 {
+        let hop_ms = hop_samples as f32 / sample_rate as f32 * 1000.0;
+        return AlignmentReport {
+            reference_energy: Vec::new(),
+            learner_energy: Vec::new(),
+            energy_error: Vec::new(),
+            reference_pitch: Vec::new(),
+            learner_pitch: Vec::new(),
+            similarity_band: Vec::new(),
+            contour_band: Vec::new(),
+            start_frame_idx: effective_start,
+            end_frame_idx: effective_start,
+            hop_ms,
+            global_time_offset_ms: global_offset_ms,
+            total_duration: 0.0,
+        };
+    }
+
+    let end_frame_idx = effective_start + learner_len;
+    let reference_energy = reference.energy[effective_start..end_frame_idx].to_vec();
+    let reference_pitch = reference.pitch[effective_start..end_frame_idx].to_vec();
+    let learner_energy = learner.energy[..learner_len].to_vec();
+    let learner_pitch = learner.pitch[..learner_len].to_vec();
+
+    let energy_error = compute_energy_error(&reference_energy, &learner_energy);
+    let similarity =
+        compute_similarity(&reference_energy, &learner_energy, &reference_pitch, &learner_pitch);
+    let contour = compute_contour_band(&reference_pitch, &learner_pitch);
     let hop_ms = hop_samples as f32 / sample_rate as f32 * 1000.0;
     AlignmentReport {
         reference_energy,
-        learner_energy: learner.energy.clone(),
+        learner_energy,
         reference_pitch,
-        learner_pitch: learner.pitch.clone(),
+        learner_pitch,
         energy_error,
         similarity_band: similarity,
         contour_band: contour,
-        start_frame_idx,
+        start_frame_idx: effective_start,
         end_frame_idx,
         hop_ms,
         global_time_offset_ms: global_offset_ms,
-        total_duration: hop_ms * learner.energy.len() as f32,
+        total_duration: hop_ms * learner_len as f32,
     }
 }
 

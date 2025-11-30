@@ -4,7 +4,9 @@ use std::time::Duration;
 use anyhow::Result;
 use flowalyzer::audio::capture::{CaptureBuilder, CaptureConfig, CaptureSource};
 use flowalyzer::pronunciation::features::{FeatureConfig, FeatureExtractor};
-use flowalyzer::pronunciation::session::{SessionConfig, SessionEngine, SessionRuntime};
+use flowalyzer::pronunciation::session::{
+    AlignmentReport, SessionConfig, SessionEngine, SessionRuntime,
+};
 use flowalyzer::pronunciation::RecordedClip;
 use flowalyzer::test_support::sine_wave;
 
@@ -290,43 +292,6 @@ fn first_snapshot_only_after_tail_seeding_with_real_data() {
 }
 
 #[test]
-fn processing_stops_naturally_when_reference_exhausted() {
-    let config = SessionConfig {
-        chunk_duration_ms: 100,
-        ..Default::default()
-    };
-    let reference = sine_wave(config.sample_rate, 220.0, 0.5);
-    let clip = RecordedClip::from_samples(reference, config.sample_rate);
-    let device_rate = 48_000;
-    let capture_signal = sine_wave(device_rate, 220.0, 2.0);
-    let device_chunk = 480;
-    let chunks: Vec<Vec<f32>> = capture_signal
-        .chunks(device_chunk)
-        .map(|c| c.to_vec())
-        .collect();
-    let builder = Arc::new(BufferCaptureBuilder::new(chunks, device_rate));
-    let (handle, controller) =
-        SessionRuntime::spawn_with_capture_builder(clip, config.clone(), builder);
-    controller.start().unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
-    let all_snapshots = handle.drain_snapshots();
-    assert!(
-        !all_snapshots.is_empty(),
-        "should have some snapshots before reference exhausted"
-    );
-    for snapshot in &all_snapshots {
-        assert!(
-            !snapshot.alignment.reference_energy.is_empty(),
-            "all snapshots must have real alignment data"
-        );
-        assert!(
-            !snapshot.alignment.learner_energy.is_empty(),
-            "all snapshots must have real alignment data"
-        );
-    }
-}
-
-#[test]
 fn shadowing_aligns_capture_and_reference() {
     let config = SessionConfig {
         chunk_duration_ms: 150,
@@ -388,4 +353,86 @@ fn shadowing_aligns_capture_and_reference() {
     );
     controller.stop().unwrap();
     controller.shutdown().unwrap();
+}
+
+#[test]
+fn snapshots_span_full_reference_duration() {
+    let config = SessionConfig {
+        chunk_duration_ms: 100,
+        ..Default::default()
+    };
+    let sample_rate = config.sample_rate;
+    let duration_seconds = 4.5;
+    let reference = sine_wave(sample_rate, 220.0, duration_seconds);
+    let reference_len = reference.len();
+    let feature_cfg = FeatureConfig::from_sample_rate(sample_rate);
+    let expected_frames = if reference_len > feature_cfg.frame_len_samples {
+        ((reference_len - feature_cfg.frame_len_samples) / feature_cfg.hop_samples) + 1
+    } else {
+        0
+    };
+
+    let clip = RecordedClip::from_samples(reference, sample_rate);
+    let device_rate = 48_000;
+    let capture_signal = sine_wave(device_rate, 220.0, duration_seconds);
+    let device_chunk = 480;
+    let chunks: Vec<Vec<f32>> = capture_signal
+        .chunks(device_chunk)
+        .map(|c| c.to_vec())
+        .collect();
+    let builder = Arc::new(BufferCaptureBuilder::new(chunks, device_rate));
+    let (handle, controller) =
+        SessionRuntime::spawn_with_capture_builder(clip, config.clone(), builder);
+
+    controller.start().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut alignments: Vec<AlignmentReport> = Vec::new();
+    while std::time::Instant::now() < deadline {
+        let snapshots = handle.drain_snapshots();
+        for snapshot in snapshots {
+            if !snapshot.alignment.reference_energy.is_empty() {
+                alignments.push(snapshot.alignment);
+            }
+        }
+        if alignments
+            .last()
+            .map(|a| a.end_frame_idx >= expected_frames.saturating_sub(2))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    controller.stop().unwrap();
+    controller.shutdown().unwrap();
+
+    assert!(!alignments.is_empty(), "expected snapshots with alignment data");
+
+    for win in alignments.windows(2) {
+        assert!(
+            win[1].start_frame_idx >= win[0].start_frame_idx,
+            "start_frame_idx must be monotonic"
+        );
+        assert!(
+            win[1].end_frame_idx >= win[0].end_frame_idx,
+            "end_frame_idx must be monotonic"
+        );
+    }
+
+    let last = alignments.last().unwrap();
+    let min_expected = expected_frames.saturating_sub(6);
+    assert!(
+        last.end_frame_idx >= min_expected,
+        "end_frame_idx {} should approach expected frame count {} within tolerance (min {})",
+        last.end_frame_idx,
+        expected_frames,
+        min_expected
+    );
+    assert!(
+        last.end_frame_idx <= expected_frames + 2,
+        "end_frame_idx {} should not exceed expected frame count {} by more than tolerance",
+        last.end_frame_idx,
+        expected_frames
+    );
 }
