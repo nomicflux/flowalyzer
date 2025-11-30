@@ -46,3 +46,5 @@
 - If you feel ANY need to go outside the prompt scope for ANY reason, you must ask the user for permission.
 - Plans are not suggestions. Plans are hard guidelines. If you think that rules contradict each other, ask for
   clarification, but you CANNOT ignore plan directions.
+- Ask clarifying questions. If you do not understand the request, if anything is ambiguous or contradictory, ask for
+  clarification instead of producing something quickly.

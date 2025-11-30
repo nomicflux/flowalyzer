@@ -84,12 +84,13 @@ impl SessionRuntime {
         let controller = SessionController {
             command_sender: command_tx,
         };
-        thread::spawn(move || runtime.run());
+        let thread_handle = thread::spawn(move || runtime.run());
         let initial_snapshot = snapshot_rx.recv().unwrap();
         let handle = SessionHandle {
             initial_snapshot,
             snapshot_receiver: snapshot_rx,
             config: config.clone(),
+            join_handle: Arc::new(Mutex::new(Some(thread_handle))),
         };
         (handle, controller)
     }
@@ -403,6 +404,7 @@ pub struct SessionHandle {
     initial_snapshot: SessionSnapshot,
     snapshot_receiver: Receiver<SessionSnapshot>,
     config: SessionConfig,
+    join_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
 }
 
 impl SessionHandle {
@@ -420,6 +422,15 @@ impl SessionHandle {
 
     pub fn initial_snapshot(&self) -> &SessionSnapshot {
         &self.initial_snapshot
+    }
+
+    pub fn join(&self) -> thread::Result<()> {
+        self.join_handle
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take())
+            .unwrap()
+            .join()
     }
 }
 

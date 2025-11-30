@@ -43,9 +43,7 @@ fn start_stop_cycle_exits_cleanly() {
 fn sine_wave(sample_rate: u32, frequency: f32, duration_secs: f32) -> Vec<f32> {
     let total_samples = (sample_rate as f32 * duration_secs) as usize;
     (0..total_samples)
-        .map(|i| {
-            (2.0 * std::f32::consts::PI * frequency * i as f32 / sample_rate as f32).sin()
-        })
+        .map(|i| (2.0 * std::f32::consts::PI * frequency * i as f32 / sample_rate as f32).sin())
         .collect()
 }
 
@@ -93,6 +91,7 @@ impl CaptureSource for BufferCapture {
 struct BufferCaptureBuilder {
     chunks: Vec<Vec<f32>>,
     sample_rate: u32,
+    fail: bool,
 }
 
 impl BufferCaptureBuilder {
@@ -100,12 +99,24 @@ impl BufferCaptureBuilder {
         Self {
             chunks,
             sample_rate,
+            fail: false,
+        }
+    }
+
+    fn failing(sample_rate: u32) -> Self {
+        Self {
+            chunks: Vec::new(),
+            sample_rate,
+            fail: true,
         }
     }
 }
 
 impl CaptureBuilder for BufferCaptureBuilder {
     fn start_capture(&self, _config: &CaptureConfig) -> Result<Box<dyn CaptureSource>> {
+        if self.fail {
+            anyhow::bail!("capture failed");
+        }
         Ok(Box::new(BufferCapture::new(
             self.chunks.clone(),
             self.sample_rate,
@@ -192,6 +203,20 @@ fn capture_builder_error_panics() {
     let builder = ErrorCaptureBuilder;
     let config = CaptureConfig::new();
     builder.start_capture(&config).unwrap();
+}
+
+#[test]
+fn runtime_panics_on_capture_failure() {
+    let clip = RecordedClip::from_samples(vec![0.0; 16_000], 16_000);
+    let config = SessionConfig::default();
+    let builder = Arc::new(BufferCaptureBuilder::failing(config.sample_rate));
+    let (handle, controller) = SessionRuntime::spawn_with_capture_builder(clip, config, builder);
+    controller.start().unwrap();
+    let result = handle.join();
+    assert!(
+        result.is_err(),
+        "runtime thread should panic when capture start fails"
+    );
 }
 
 #[test]
@@ -290,7 +315,10 @@ fn processing_stops_naturally_when_reference_exhausted() {
     controller.start().unwrap();
     std::thread::sleep(Duration::from_millis(1000));
     let all_snapshots = handle.drain_snapshots();
-    assert!(!all_snapshots.is_empty(), "should have some snapshots before reference exhausted");
+    assert!(
+        !all_snapshots.is_empty(),
+        "should have some snapshots before reference exhausted"
+    );
     for snapshot in &all_snapshots {
         assert!(
             !snapshot.alignment.reference_energy.is_empty(),
