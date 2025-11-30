@@ -436,3 +436,59 @@ fn snapshots_span_full_reference_duration() {
         expected_frames
     );
 }
+
+#[test]
+fn similarity_band_remains_scaled_and_finite_over_full_clip() {
+    let config = SessionConfig {
+        chunk_duration_ms: 150,
+        ..Default::default()
+    };
+    let sample_rate = config.sample_rate;
+    let duration_seconds = 3.0;
+    let reference = sine_wave(sample_rate, 220.0, duration_seconds);
+    let clip = RecordedClip::from_samples(reference, sample_rate);
+    let device_rate = 48_000;
+    let capture_signal = sine_wave(device_rate, 220.0, duration_seconds);
+    let device_chunk = 480;
+    let chunks: Vec<Vec<f32>> = capture_signal
+        .chunks(device_chunk)
+        .map(|c| c.to_vec())
+        .collect();
+    let builder = Arc::new(BufferCaptureBuilder::new(chunks, device_rate));
+    let (handle, controller) =
+        SessionRuntime::spawn_with_capture_builder(clip, config.clone(), builder);
+
+    controller.shadow().unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    controller.stop().unwrap();
+    controller.shutdown().unwrap();
+
+    let snapshots = handle.drain_snapshots();
+    let mut all_similarity = Vec::new();
+    for snapshot in snapshots {
+        if !snapshot.recording {
+            continue;
+        }
+        all_similarity.extend_from_slice(&snapshot.alignment.similarity_band);
+    }
+    assert!(
+        !all_similarity.is_empty(),
+        "expected similarity data across the clip"
+    );
+    assert!(
+        all_similarity.iter().all(|v| v.is_finite()),
+        "similarity values should be finite"
+    );
+    let min = all_similarity
+        .iter()
+        .fold(f32::INFINITY, |m, v| m.min(*v));
+    let max = all_similarity
+        .iter()
+        .fold(f32::NEG_INFINITY, |m, v| m.max(*v));
+    assert!(
+        max <= 1.1 && min >= -1.0,
+        "similarity should stay in a reasonable scaled band; min {}, max {}",
+        min,
+        max
+    );
+}

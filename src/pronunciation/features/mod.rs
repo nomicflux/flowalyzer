@@ -141,6 +141,10 @@ fn frame_energy(frame: &[f32]) -> f32 {
 }
 
 fn frame_pitch(frame: &[f32], sample_rate: u32) -> f32 {
+    let energy = frame_energy(frame);
+    if energy <= 1e-6 {
+        return 0.0;
+    }
     let len = frame.len();
     // Autocorrelation
     // We look for the lag with the highest correlation in the valid pitch range.

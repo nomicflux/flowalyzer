@@ -75,16 +75,39 @@ fn compute_similarity(
     reference_pitch: &[f32],
     learner_pitch: &[f32],
 ) -> Vec<f32> {
+    const EPS: f32 = 1e-6;
     let learner_log_pitch: Vec<f32> = learner_pitch.iter().map(|p| (1.0 + p).ln()).collect();
     let reference_log_pitch: Vec<f32> = reference_pitch.iter().map(|p| (1.0 + p).ln()).collect();
-    let pitch_offset = mean(&learner_log_pitch) - mean(&reference_log_pitch);
+    let voiced: Vec<usize> = learner_pitch
+        .iter()
+        .zip(reference_pitch.iter())
+        .enumerate()
+        .filter_map(|(idx, (l, r))| if *l > 0.0 && *r > 0.0 { Some(idx) } else { None })
+        .collect();
+    let pitch_offset = if voiced.is_empty() {
+        0.0
+    } else {
+        mean_masked(&learner_log_pitch, &voiced) - mean_masked(&reference_log_pitch, &voiced)
+    };
 
     (0..reference_energy.len())
         .map(|index| {
             let energy_delta = (learner_energy[index] - reference_energy[index]).abs();
-            let pitch_delta =
-                (learner_log_pitch[index] - pitch_offset - reference_log_pitch[index]).abs();
-            -(energy_delta + pitch_delta)
+            let energy_norm =
+                energy_delta / (learner_energy[index].abs() + reference_energy[index].abs() + EPS);
+
+            let pitch_norm =
+                if learner_pitch[index] <= 0.0 && reference_pitch[index] <= 0.0 {
+                    0.0
+                } else if learner_pitch[index] <= 0.0 || reference_pitch[index] <= 0.0 {
+                    1.0 // penalize unvoiced mismatch strongly
+                } else {
+                    let delta =
+                        (learner_log_pitch[index] - pitch_offset - reference_log_pitch[index]).abs();
+                    delta / (learner_log_pitch[index].abs() + reference_log_pitch[index].abs() + EPS)
+                };
+
+            1.0 - (energy_norm + pitch_norm)
         })
         .collect()
 }
@@ -92,13 +115,56 @@ fn compute_similarity(
 fn compute_contour_band(reference: &[f32], learner: &[f32]) -> Vec<f32> {
     let learner_log_pitch: Vec<f32> = learner.iter().map(|p| (1.0 + p).ln()).collect();
     let reference_log_pitch: Vec<f32> = reference.iter().map(|p| (1.0 + p).ln()).collect();
-    let pitch_offset = mean(&learner_log_pitch) - mean(&reference_log_pitch);
+    let voiced: Vec<usize> = learner
+        .iter()
+        .zip(reference.iter())
+        .enumerate()
+        .filter_map(|(idx, (l, r))| if *l > 0.0 && *r > 0.0 { Some(idx) } else { None })
+        .collect();
+    if voiced.is_empty() {
+        return vec![0.0; learner.len()];
+    }
 
-    (0..learner.len())
-        .map(|i| learner_log_pitch[i] - pitch_offset - reference_log_pitch[i])
-        .collect()
+    let voiced_offset =
+        mean_masked(&learner_log_pitch, &voiced) - mean_masked(&reference_log_pitch, &voiced);
+    let mut smoothed = vec![0.0; learner.len()];
+
+    // Median smoothing over a 3-frame window on voiced frames; leave unvoiced as zero.
+    for i in 0..learner.len() {
+        if learner[i] <= 0.0 || reference[i] <= 0.0 {
+            smoothed[i] = 0.0;
+            continue;
+        }
+        let start = i.saturating_sub(1);
+        let end = (i + 2).min(learner.len());
+        let mut window: Vec<f32> = (start..end)
+            .filter_map(|j| {
+                if learner[j] > 0.0 && reference[j] > 0.0 {
+                    Some(learner_log_pitch[j] - voiced_offset - reference_log_pitch[j])
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if window.is_empty() {
+            smoothed[i] = 0.0;
+        } else {
+            window.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mid = window.len() / 2;
+            let median = if window.len().is_multiple_of(2) {
+                // For even windows, prefer the lower median to preserve sign and avoid cancellation.
+                window[mid - 1]
+            } else {
+                window[mid]
+            };
+            smoothed[i] = median;
+        }
+    }
+
+    smoothed
 }
 
-fn mean(values: &[f32]) -> f32 {
-    values.iter().sum::<f32>() / values.len() as f32
+fn mean_masked(values: &[f32], indices: &[usize]) -> f32 {
+    let sum: f32 = indices.iter().map(|&i| values[i]).sum();
+    sum / indices.len() as f32
 }

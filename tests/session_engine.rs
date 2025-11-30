@@ -128,6 +128,92 @@ fn trimming_respects_pitch_length() {
 }
 
 #[test]
+fn voiced_silence_voiced_pipeline_emits_segmented_pitch() {
+    let config = SessionConfig {
+        chunk_duration_ms: 150,
+        ..Default::default()
+    };
+    let feature_cfg = FeatureConfig::from_sample_rate(config.sample_rate);
+    let chunk_len = (config.sample_rate as usize * config.chunk_duration_ms as usize) / 1_000;
+
+    // Build synthetic segments: voiced (220Hz) -> silence -> voiced (220Hz)
+    let voiced_chunk: Vec<f32> = (0..chunk_len)
+        .map(|i| (2.0 * std::f32::consts::PI * 220.0 * i as f32 / config.sample_rate as f32).sin())
+        .collect();
+    let silence_chunk = vec![0.0; chunk_len];
+    let mut reference_stream = Vec::new();
+    reference_stream.extend_from_slice(&voiced_chunk);
+    reference_stream.extend_from_slice(&silence_chunk);
+    reference_stream.extend_from_slice(&voiced_chunk);
+    let (mut engine, _) = build_engine(&reference_stream, &config);
+
+    let mut learner_stream = Vec::new();
+    learner_stream.extend_from_slice(&voiced_chunk);
+    learner_stream.extend_from_slice(&silence_chunk);
+    learner_stream.extend_from_slice(&voiced_chunk);
+
+    let required_tail_len = feature_cfg.frame_len_samples - feature_cfg.hop_samples;
+    let tail = learner_stream[..required_tail_len].to_vec();
+    engine.seed_tail(&tail);
+
+    let mut offset = 0;
+    let mut snapshots = Vec::new();
+    while offset + chunk_len <= learner_stream.len() {
+        let chunk = &learner_stream[offset..offset + chunk_len];
+        let report = engine.process_chunk(chunk);
+        snapshots.push(report);
+        offset += chunk_len;
+    }
+
+    let mut all_learner_pitch = Vec::new();
+    let mut all_reference_pitch = Vec::new();
+    for snap in snapshots {
+        all_learner_pitch.extend_from_slice(&snap.learner_pitch);
+        all_reference_pitch.extend_from_slice(&snap.reference_pitch);
+    }
+
+    // Expect silence region to produce zeros; voiced regions non-zero.
+    let len = all_learner_pitch.len();
+    assert!(len > 0, "should produce learner pitch frames");
+    let first_third = len / 3;
+    let second_third = 2 * len / 3;
+    assert!(
+        all_learner_pitch[..first_third]
+            .iter()
+            .any(|v| *v > 0.0),
+        "first voiced segment should have non-zero pitch"
+    );
+    let silence_zero_fraction = all_learner_pitch[first_third..second_third]
+        .iter()
+        .filter(|v| **v == 0.0)
+        .count() as f32
+        / (second_third - first_third) as f32;
+    assert!(
+        silence_zero_fraction >= 0.5,
+        "silence segment should be mostly zeroed, got fraction {}",
+        silence_zero_fraction
+    );
+    assert!(
+        all_learner_pitch[second_third..]
+            .iter()
+            .any(|v| *v > 0.0),
+        "second voiced segment should have non-zero pitch"
+    );
+
+    // Reference pitch should also segment similarly.
+    let reference_zero_fraction = all_reference_pitch[first_third..second_third]
+        .iter()
+        .filter(|v| **v == 0.0)
+        .count() as f32
+        / (second_third - first_third) as f32;
+    assert!(
+        reference_zero_fraction >= 0.5,
+        "reference silence should be mostly zeroed, got fraction {}",
+        reference_zero_fraction
+    );
+}
+
+#[test]
 fn non_multiple_tail_preserves_phase_and_state() {
     let config = SessionConfig {
         chunk_duration_ms: 120,

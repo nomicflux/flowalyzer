@@ -160,6 +160,7 @@ impl SessionApp {
             &self.histories.reference_energy,
             &self.histories.learner_energy,
             (Color32::LIGHT_BLUE, Color32::LIGHT_RED),
+            false,
         );
         draw_history_plot(
             ui,
@@ -167,6 +168,7 @@ impl SessionApp {
             &self.histories.reference_pitch,
             &self.histories.learner_pitch,
             (Color32::LIGHT_GREEN, Color32::LIGHT_YELLOW),
+            false,
         );
         draw_history_plot(
             ui,
@@ -177,6 +179,7 @@ impl SessionApp {
                 Color32::from_rgb(0xE0, 0x9C, 0x35),
                 Color32::from_rgb(0x8A, 0x2B, 0xE2),
             ),
+            true,
         );
         draw_comparison_panel(ui, &self.histories.similarity, &self.histories.contour);
     }
@@ -258,12 +261,50 @@ fn trim_to_window(history: &mut VecDeque<f32>) {
     }
 }
 
+fn smooth_series(history: &VecDeque<f32>) -> Vec<f32> {
+    if history.len() < 2 {
+        return history.iter().copied().collect();
+    }
+    let mut smoothed = Vec::with_capacity(history.len());
+    for idx in 0..history.len() {
+        let start = idx.saturating_sub(1);
+        let end = (idx + 2).min(history.len());
+        let mut sum = 0.0;
+        let mut count: f32 = 0.0;
+        history
+            .iter()
+            .take(end)
+            .skip(start)
+            .for_each(|v| {
+                sum += *v;
+                count += 1.0;
+            });
+        smoothed.push(sum / count.max(1.0));
+    }
+    smoothed
+}
+
+fn shared_range(reference: &[f32], learner: &[f32]) -> (f32, f32) {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for v in reference.iter().chain(learner.iter()) {
+        min = min.min(*v);
+        max = max.max(*v);
+    }
+    if min.is_infinite() || max.is_infinite() {
+        (0.0, 0.0)
+    } else {
+        (min, max)
+    }
+}
+
 fn draw_history_plot(
     ui: &mut egui::Ui,
     title: &str,
     reference: &VecDeque<f32>,
     learner: &VecDeque<f32>,
     colors: (Color32, Color32),
+    smooth: bool,
 ) {
     ui.label(title);
     let desired = Vec2::new(ui.available_width(), 120.0);
@@ -276,20 +317,33 @@ fn draw_history_plot(
         Stroke::new(1.0, Color32::from_gray(0x44)),
     );
     let inner = rect.shrink(6.0);
-    draw_history_line(painter, inner, reference, colors.0);
-    draw_history_line(painter, inner, learner, colors.1);
+    let reference_series = if smooth {
+        smooth_series(reference)
+    } else {
+        reference.iter().copied().collect()
+    };
+    let learner_series = if smooth {
+        smooth_series(learner)
+    } else {
+        learner.iter().copied().collect()
+    };
+    let (min, max) = shared_range(&reference_series, &learner_series);
+    draw_history_line(painter, inner, &reference_series, min, max, colors.0);
+    draw_history_line(painter, inner, &learner_series, min, max, colors.1);
 }
 
-fn draw_history_line(painter: &Painter, rect: Rect, history: &VecDeque<f32>, color: Color32) {
-    if history.len() < 2 {
+fn draw_history_line(
+    painter: &Painter,
+    rect: Rect,
+    history: &[f32],
+    min: f32,
+    max: f32,
+    color: Color32,
+) {
+    if history.len() < 2 || (max - min).abs() < 1e-6 {
         return;
     }
 
-    let (min, max) = history
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
-            (min.min(value), max.max(value))
-        });
     let range = (max - min).max(1e-4);
     let len = history.len();
     let mut points = Vec::with_capacity(len);
@@ -311,7 +365,7 @@ fn draw_history_line(painter: &Painter, rect: Rect, history: &VecDeque<f32>, col
 }
 
 fn draw_comparison_panel(ui: &mut egui::Ui, similarity: &VecDeque<f32>, contour: &VecDeque<f32>) {
-    ui.label("Spectrogram comparison");
+    ui.label("Spectrogram comparison (Similarity: higher is better; Contour: ~0 means matched)");
     let desired = Vec2::new(ui.available_width(), 120.0);
     let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
     let painter = ui.painter();
@@ -326,8 +380,11 @@ fn draw_comparison_panel(ui: &mut egui::Ui, similarity: &VecDeque<f32>, contour:
     let rows = ROWS;
     let max_columns = HISTORY_CAPACITY_FRAMES / 10; // ~300 columns at 10ms hop = 3s segments; still under 300
     let columns = max_columns;
+    let sim_range = data_range(similarity);
+    let contour_range = data_range(contour);
     for row in 0..rows {
         let source = if row == 0 { similarity } else { contour };
+        let range = if row == 0 { sim_range } else { contour_range };
         draw_row(
             painter,
             inner,
@@ -339,12 +396,13 @@ fn draw_comparison_panel(ui: &mut egui::Ui, similarity: &VecDeque<f32>, contour:
             } else {
                 |value| contour_color(value)
             },
+            range,
         );
     }
 
     ui.horizontal(|ui| {
-        ui.colored_label(Color32::LIGHT_BLUE, "Similarity");
-        ui.colored_label(Color32::LIGHT_RED, "Contour");
+        ui.colored_label(Color32::LIGHT_BLUE, "Similarity (scaled 0–1)");
+        ui.colored_label(Color32::LIGHT_RED, "Contour (~0 match)");
     });
 }
 
@@ -355,6 +413,7 @@ fn draw_row<F>(
     columns: usize,
     source: &VecDeque<f32>,
     color_fn: F,
+    range: (f32, f32),
 ) where
     F: Fn(f32) -> Color32,
 {
@@ -365,13 +424,9 @@ fn draw_row<F>(
     let available_columns = columns.min(length).max(1);
     let column_width = (inner.width() / available_columns as f32).max(1.0);
     let column_height = inner.height() / 2.0;
-    let (min, max) = source
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &value| {
-            (min.min(value), max.max(value))
-        });
-    let mid = 0.0;
-    let span = (max - min).abs();
+    let (min, max) = range;
+    let span = (max - min).abs().max(1e-6);
+    let mid = (max + min) * 0.5;
     for col in 0..available_columns {
         let sample_idx = ((col as f32) * length as f32 / available_columns as f32)
             .min((length - 1) as f32) as usize;
@@ -402,9 +457,9 @@ fn contour_color(value: f32) -> Color32 {
     gradient_color(
         value,
         &[
-            (0.0, Color32::from_rgb(0, 0, 128)),
-            (0.5, Color32::from_rgb(128, 0, 255)),
-            (1.0, Color32::from_rgb(255, 0, 0)),
+            (0.0, Color32::from_rgb(0, 32, 128)),
+            (0.5, Color32::from_rgb(64, 192, 255)),
+            (1.0, Color32::from_rgb(240, 96, 32)),
         ],
     )
 }
@@ -430,6 +485,23 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let g = a.g() as f32 + (b.g() as f32 - a.g() as f32) * t;
     let b = a.b() as f32 + (b.b() as f32 - a.b() as f32) * t;
     Color32::from_rgb(r as u8, g as u8, b as u8)
+}
+
+fn data_range(values: &VecDeque<f32>) -> (f32, f32) {
+    if values.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for v in values.iter() {
+        min = min.min(*v);
+        max = max.max(*v);
+    }
+    if !min.is_finite() || !max.is_finite() {
+        (0.0, 0.0)
+    } else {
+        (min, max)
+    }
 }
 
 #[cfg(test)]
@@ -534,5 +606,69 @@ mod tests {
             "restart should clear histories and accept new chunk length"
         );
         assert_eq!(150, app.histories.learner_energy.len());
+    }
+
+    #[test]
+    fn similarity_heatmap_handles_scaled_range() {
+        let ctx = egui::Context::default();
+        let mut app = dummy_app();
+        let frames = 50;
+        let sim_values: Vec<f32> = (0..frames).map(|i| 0.2 + 0.8 * (i as f32 / frames as f32)).collect();
+        let contour_values: Vec<f32> = (0..frames).map(|i| -0.5 + (i as f32 / frames as f32)).collect();
+        let snapshot = AlignmentReport {
+            reference_energy: vec![0.0; frames],
+            learner_energy: vec![0.0; frames],
+            energy_error: vec![0.0; frames],
+            reference_pitch: vec![0.0; frames],
+            learner_pitch: vec![0.0; frames],
+            similarity_band: sim_values,
+            contour_band: contour_values,
+            start_frame_idx: 0,
+            end_frame_idx: frames,
+            hop_ms: FRAME_HOP_MS as f32,
+            global_time_offset_ms: 0.0,
+            total_duration: frames as f32 * FRAME_HOP_MS as f32,
+        };
+        app.apply_snapshot(snapshot_with_alignment(snapshot, true));
+
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                draw_comparison_panel(ui, &app.histories.similarity, &app.histories.contour);
+            });
+        });
+    }
+
+    #[test]
+    fn smoothing_applies_to_similarity_plot_series() {
+        let data: Vec<f32> = vec![1.0, -1.0, 1.0];
+        let deque = VecDeque::from(data.clone());
+        let smoothed = super::smooth_series(&deque);
+        assert_eq!(smoothed.len(), data.len());
+        assert!(
+            smoothed.iter().zip(data.iter()).any(|(s, o)| (s - o).abs() > 0.1),
+            "smoothing should change jagged data"
+        );
+    }
+
+    #[test]
+    fn shared_range_spans_both_series() {
+        let reference = vec![0.0, 1.0];
+        let learner = vec![2.0, 3.0];
+        let (min, max) = super::shared_range(&reference, &learner);
+        assert_eq!(min, 0.0);
+        assert_eq!(max, 3.0);
+    }
+
+    #[test]
+    fn data_range_handles_empty_and_finite_values() {
+        let empty = VecDeque::new();
+        let (min, max) = super::data_range(&empty);
+        assert_eq!((min, max), (0.0, 0.0));
+
+        let mut values = VecDeque::new();
+        values.extend([0.2, 0.5, 0.8]);
+        let (min, max) = super::data_range(&values);
+        assert!((min - 0.2).abs() < 1e-6);
+        assert!((max - 0.8).abs() < 1e-6);
     }
 }

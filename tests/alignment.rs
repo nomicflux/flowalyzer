@@ -33,7 +33,7 @@ fn similarity_handles_silence_with_silence() {
     assert!(report
         .similarity_band
         .iter()
-        .all(|value| (*value).abs() < 1e-6));
+        .all(|value| (*value) > 0.95));
     assert!(report.contour_band.iter().all(|value| value.abs() < 1e-6));
     assert!((report.total_duration - 30.0).abs() < 1e-6);
     assert_eq!(report.start_frame_idx, 0);
@@ -47,8 +47,14 @@ fn similarity_marks_silence_against_sound() {
     let learner = chunk_features(vec![1.0, 1.0], vec![100.0, 120.0]);
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
     assert_eq!(report.energy_error, vec![1.0, 1.0]);
-    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
-    assert!(report.contour_band.iter().any(|v| *v < 0.0));
+    assert!(
+        report.similarity_band.iter().all(|v| *v < 0.5),
+        "silence vs sound should degrade similarity"
+    );
+    assert!(
+        report.contour_band.iter().all(|v| *v == 0.0),
+        "unvoiced frames should produce zero contour"
+    );
 }
 
 #[test]
@@ -57,8 +63,14 @@ fn similarity_marks_sound_against_silence() {
     let learner = chunk_features(vec![0.0, 0.0], vec![0.0, 0.0]);
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
     assert_eq!(report.energy_error, vec![-1.0, -2.0]);
-    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
-    assert!(report.contour_band.iter().any(|v| *v > 0.0));
+    assert!(
+        report.similarity_band.iter().all(|v| *v < 0.5),
+        "sound vs silence should degrade similarity"
+    );
+    assert!(
+        report.contour_band.iter().all(|v| *v == 0.0),
+        "unvoiced frames should produce zero contour"
+    );
 }
 
 #[test]
@@ -67,7 +79,13 @@ fn similarity_matches_equal_sound() {
     let learner = chunk_features(vec![1.5, 2.0], vec![200.0, 220.0]);
     let report = align_features(&reference, &learner, 0, 25.0, SAMPLE_RATE, HOP_SAMPLES);
     assert_eq!(report.energy_error, vec![0.0, 0.0]);
-    assert_eq!(report.similarity_band, vec![0.0, 0.0]);
+    assert!(
+        report
+            .similarity_band
+            .iter()
+            .all(|v| (*v - 1.0).abs() < 1e-3),
+        "perfect match should be near 1.0 similarity"
+    );
     assert_eq!(report.contour_band, vec![0.0, 0.0]);
     assert_eq!(report.start_frame_idx, 0);
     assert_eq!(report.end_frame_idx, 2);
@@ -81,8 +99,23 @@ fn similarity_detects_difference_between_sounds() {
     let learner = chunk_features(vec![0.5, 2.0], vec![150.0, 260.0]);
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
     assert_eq!(report.energy_error, vec![-0.5, 0.5]);
-    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
-    assert!(report.contour_band.iter().any(|v| v.abs() > 0.1));
+    let min_sim = report
+        .similarity_band
+        .iter()
+        .fold(f32::INFINITY, |m, v| m.min(*v));
+    assert!(
+        min_sim < 0.8,
+        "mismatch should lower similarity relative to perfect match; min {}",
+        min_sim
+    );
+    assert!(
+        report
+            .contour_band
+            .iter()
+            .filter(|v| **v != 0.0)
+            .any(|v| v.abs() > 0.01),
+        "voiced frames should carry noticeable contour differences"
+    );
 }
 
 #[test]
@@ -139,5 +172,59 @@ fn gracefully_truncates_when_reference_exhausted() {
             .iter()
             .all(|v| v.is_finite()),
         "similarity values should remain finite after truncation"
+    );
+}
+
+#[test]
+fn voiced_silence_voiced_contour_tracks_voiced_and_zeros_silence() {
+    let reference = reference_features(
+        vec![1.0; 6],
+        vec![200.0, 210.0, 0.0, 0.0, 230.0, 240.0],
+    );
+    let learner = chunk_features(
+        vec![1.0; 6],
+        vec![198.0, 212.0, 0.0, 0.0, 228.0, 242.0],
+    );
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    assert_eq!(
+        report.contour_band[2], 0.0,
+        "silence frame should produce zero contour"
+    );
+    assert_eq!(
+        report.contour_band[3], 0.0,
+        "silence frame should produce zero contour"
+    );
+
+    let voiced = &[report.contour_band[0], report.contour_band[1], report.contour_band[4], report.contour_band[5]];
+    assert!(
+        voiced.iter().all(|v| v.abs() < 0.05),
+        "voiced frames should be close after offset normalization: {:?}",
+        voiced
+    );
+}
+
+#[test]
+fn smoothing_preserves_voiced_shape_and_zeroes_unvoiced() {
+    let reference = reference_features(
+        vec![1.0; 7],
+        vec![200.0, 205.0, 0.0, 0.0, 210.0, 215.0, 220.0],
+    );
+    let learner = chunk_features(
+        vec![1.0; 7],
+        vec![202.0, 207.0, 0.0, 0.0, 208.0, 213.0, 218.0],
+    );
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    // Expect unvoiced frames smoothed to zero
+    assert_eq!(report.contour_band[2], 0.0);
+    assert_eq!(report.contour_band[3], 0.0);
+
+    // Expect voiced frames to retain the general contour (small deltas around 0)
+    let voiced = &[report.contour_band[0], report.contour_band[1], report.contour_band[4], report.contour_band[5], report.contour_band[6]];
+    assert!(
+        voiced.iter().all(|v| v.abs() < 0.08),
+        "voiced frames should stay close after smoothing: {:?}",
+        voiced
     );
 }
