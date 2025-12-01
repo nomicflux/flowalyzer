@@ -99,19 +99,28 @@ impl SessionRuntime {
     }
 
     fn run(mut self) {
+        let feature_cfg = FeatureConfig::from_sample_rate(self.config.sample_rate);
+        let extractor = FeatureExtractor::new();
+        let reference_features = extractor.extract_reference(
+            &self.reference_clip.samples,
+            self.config.sample_rate,
+            feature_cfg,
+        );
+        let hop_ms = feature_cfg.hop_samples as f32 / self.config.sample_rate as f32 * 1000.0;
+        
         let initial_alignment = AlignmentReport {
-            reference_energy: Vec::new(),
+            reference_energy: reference_features.energy.clone(),
             learner_energy: Vec::new(),
             energy_error: Vec::new(),
-            reference_pitch: Vec::new(),
+            reference_pitch: reference_features.pitch.clone(),
             learner_pitch: Vec::new(),
             similarity_band: Vec::new(),
             contour_band: Vec::new(),
             start_frame_idx: 0,
-            end_frame_idx: 0,
-            hop_ms: 0.0,
+            end_frame_idx: reference_features.energy.len(),
+            hop_ms,
             global_time_offset_ms: 0.0,
-            total_duration: 0.0,
+            total_duration: hop_ms * reference_features.energy.len() as f32,
         };
         let initial_snapshot = SessionSnapshot {
             alignment: initial_alignment,

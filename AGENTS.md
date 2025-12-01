@@ -19,7 +19,8 @@
 ## Testing Guidelines
 - Add unit tests for every pure function, and add integrations tests when the tests accurately test the application flow (no complicated test harnesses - prefer manual testing.)
 - Run `cargo test --all` until there are no test failures, even if they are in not in code that you touched
-- Run `cargo clippy --all` until there are no warnings. Dead code is not acceptable.
+- Run `cargo clippy --all` until there are no warnings. Dead code is not acceptable. Fix underlying causes; do not add
+  `allow` flags to pass clippy warnings.
 - Test & clippy commands must be run after EVERY completed unit of work. Do not say "Tests not requested." If you
   touched code, you run tests and clippy.
 
@@ -48,3 +49,9 @@
   clarification, but you CANNOT ignore plan directions.
 - Ask clarifying questions. If you do not understand the request, if anything is ambiguous or contradictory, ask for
   clarification instead of producing something quickly.
+- NO SUPPOSITION LANGUAGE. If you discover words like "maybe", "likely", "possibly", "perhaps", "could be" in you
+  response, scrap the response entirely. You do not have sufficient evidence; you must research your evidence first and
+  provide a real answer without supposition. If after research you cannot offer a suggestion without supposition, admit
+  your lack of understanding instead and ask the user for specific pieces of information that you need.
+- When the user says to stop, you stop. This supersedes every other rule.
+

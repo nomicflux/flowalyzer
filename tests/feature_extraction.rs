@@ -76,7 +76,7 @@ fn chunk_preserves_hop_phase_with_tail_contribution() {
     let extractor = FeatureExtractor::new();
     let features = extractor.extract_chunk(&prev_tail, &chunk, sample_rate, cfg, 0);
 
-    assert_eq!(features.frame_starts.first().copied(), Some(96));
+    assert_eq!(features.frame_starts.first().copied(), Some(-704));
     assert!(features
         .frame_starts
         .windows(2)

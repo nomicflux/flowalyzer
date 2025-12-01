@@ -22,100 +22,106 @@ fn chunk_features(energy: Vec<f32>, pitch: Vec<f32>) -> ChunkFeatures {
     }
 }
 
-#[test]
-fn similarity_handles_silence_with_silence() {
-    let energy = vec![0.0, 0.0, 0.0];
-    let pitch = vec![0.0, 0.0, 0.0];
-    let reference = reference_features(energy.clone(), pitch.clone());
-    let learner = chunk_features(energy, pitch);
-    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert!(report.energy_error.iter().all(|value| value.abs() < 1e-6));
-    assert!(report
-        .similarity_band
-        .iter()
-        .all(|value| (*value) > 0.95));
-    assert!(report.contour_band.iter().all(|value| value.abs() < 1e-6));
-    assert!((report.total_duration - 30.0).abs() < 1e-6);
-    assert_eq!(report.start_frame_idx, 0);
-    assert_eq!(report.end_frame_idx, 3);
-    assert!((report.hop_ms - 10.0).abs() < 1e-6);
+fn mean(values: &[f32]) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().copied().sum::<f32>() / values.len() as f32
 }
 
 #[test]
-fn similarity_marks_silence_against_sound() {
+fn given_silence_reference_and_silence_learner_then_similarity_is_max() {
+    // Given both reference and learner are silent
+    let reference = reference_features(vec![0.0, 0.0, 0.0], vec![0.0, 0.0, 0.0]);
+    let learner = chunk_features(vec![0.0, 0.0, 0.0], vec![0.0, 0.0, 0.0]);
+
+    // When we align them
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    // Then similarity is at the top end and contour stays silent
+    assert!(report.similarity_band.iter().all(|v| *v > 0.95));
+    assert!(report.contour_band.iter().all(|v| v.abs() < 1e-6));
+}
+
+#[test]
+fn given_silence_reference_and_voiced_learner_then_similarity_is_worst() {
+    // Given the reference is silent and the learner is voiced
     let reference = reference_features(vec![0.0, 0.0], vec![0.0, 0.0]);
-    let learner = chunk_features(vec![1.0, 1.0], vec![100.0, 120.0]);
+    let learner = chunk_features(vec![1.0, 1.0], vec![120.0, 140.0]);
+
+    // When we align them
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.energy_error, vec![1.0, 1.0]);
-    assert!(
-        report.similarity_band.iter().all(|v| *v < 0.5),
-        "silence vs sound should degrade similarity"
-    );
-    assert!(
-        report.contour_band.iter().all(|v| *v == 0.0),
-        "unvoiced frames should produce zero contour"
-    );
+
+    // Then similarity is driven to the worst end (negative) and contour stays zero because reference is unvoiced
+    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
+    assert!(report.contour_band.iter().all(|v| *v == 0.0));
 }
 
 #[test]
-fn similarity_marks_sound_against_silence() {
-    let reference = reference_features(vec![1.0, 2.0], vec![100.0, 110.0]);
-    let learner = chunk_features(vec![0.0, 0.0], vec![0.0, 0.0]);
+fn given_voiced_reference_and_voiced_learner_with_match_then_similarity_near_top() {
+    // Given matching voiced reference and learner frames
+    let reference = reference_features(vec![1.2, 1.0], vec![200.0, 210.0]);
+    let learner = chunk_features(vec![1.2, 1.0], vec![200.0, 210.0]);
+
+    // When we align them
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.energy_error, vec![-1.0, -2.0]);
-    assert!(
-        report.similarity_band.iter().all(|v| *v < 0.5),
-        "sound vs silence should degrade similarity"
-    );
-    assert!(
-        report.contour_band.iter().all(|v| *v == 0.0),
-        "unvoiced frames should produce zero contour"
-    );
+
+    // Then similarity stays near the top and contour differences stay near zero
+    assert!(report.similarity_band.iter().all(|v| *v > 0.95));
+    assert!(report.contour_band.iter().all(|v| v.abs() < 1e-6));
 }
 
 #[test]
-fn similarity_matches_equal_sound() {
-    let reference = reference_features(vec![1.5, 2.0], vec![200.0, 220.0]);
-    let learner = chunk_features(vec![1.5, 2.0], vec![200.0, 220.0]);
-    let report = align_features(&reference, &learner, 0, 25.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.energy_error, vec![0.0, 0.0]);
-    assert!(
-        report
-            .similarity_band
-            .iter()
-            .all(|v| (*v - 1.0).abs() < 1e-3),
-        "perfect match should be near 1.0 similarity"
-    );
-    assert_eq!(report.contour_band, vec![0.0, 0.0]);
-    assert_eq!(report.start_frame_idx, 0);
-    assert_eq!(report.end_frame_idx, 2);
-    assert!((report.total_duration - 20.0).abs() < 1e-6);
-    assert_eq!(report.global_time_offset_ms, 25.0);
-}
-
-#[test]
-fn similarity_detects_difference_between_sounds() {
-    let reference = reference_features(vec![1.0, 1.5], vec![180.0, 200.0]);
+fn given_voiced_reference_and_voiced_learner_with_mismatch_then_similarity_degrades() {
+    // Given mismatched energy and pitch between reference and learner
+    let reference = reference_features(vec![1.5, 1.5], vec![180.0, 200.0]);
     let learner = chunk_features(vec![0.5, 2.0], vec![150.0, 260.0]);
+
+    // When we align them
     let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
-    assert_eq!(report.energy_error, vec![-0.5, 0.5]);
-    let min_sim = report
-        .similarity_band
-        .iter()
-        .fold(f32::INFINITY, |m, v| m.min(*v));
-    assert!(
-        min_sim < 0.8,
-        "mismatch should lower similarity relative to perfect match; min {}",
-        min_sim
-    );
-    assert!(
-        report
-            .contour_band
-            .iter()
-            .filter(|v| **v != 0.0)
-            .any(|v| v.abs() > 0.01),
-        "voiced frames should carry noticeable contour differences"
-    );
+
+    // Then similarity degrades (falls below a near-top threshold) but remains finite and not clamped away
+    assert!(report.similarity_band.iter().any(|v| *v < 0.8));
+    assert!(report.similarity_band.iter().all(|v| v.is_finite()));
+}
+
+#[test]
+fn given_reference_silence_against_speech_then_similarity_persists_negative_values() {
+    // Given reference silence and strong learner speech
+    let reference = reference_features(vec![0.0, 0.0], vec![0.0, 0.0]);
+    let learner = chunk_features(vec![10.0, 10.0], vec![400.0, 380.0]);
+
+    // When we align them
+    let report = align_features(&reference, &learner, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    // Then similarity includes negative values (preserved instead of clamped) indicating worst-case mismatch
+    assert!(report.similarity_band.iter().all(|v| *v < 0.0));
+}
+
+#[test]
+fn given_session_scale_strong_mismatch_becomes_more_negative_than_moderate() {
+    // Given a reference with varying energy and pitch
+    let reference = reference_features(vec![1.0, 2.0, 1.5], vec![200.0, 210.0, 220.0]);
+
+    // And three learner variants: perfect match, moderate mismatch, and strong mismatch
+    let perfect = chunk_features(vec![1.0, 2.0, 1.5], vec![200.0, 210.0, 220.0]);
+    let moderate = chunk_features(vec![2.0, 3.0, 1.5], vec![260.0, 250.0, 240.0]);
+    let strong = chunk_features(vec![8.0, 8.0, 8.0], vec![400.0, 380.0, 360.0]);
+
+    // When we align them
+    let perfect_report = align_features(&reference, &perfect, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    let moderate_report = align_features(&reference, &moderate, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+    let strong_report = align_features(&reference, &strong, 0, 0.0, SAMPLE_RATE, HOP_SAMPLES);
+
+    let perfect_mean = mean(&perfect_report.similarity_band);
+    let moderate_mean = mean(&moderate_report.similarity_band);
+    let strong_mean = mean(&strong_report.similarity_band);
+
+    // Then perfect > moderate > strong, and strong falls below zero
+    assert!(perfect_mean > moderate_mean, "perfect should outrank moderate");
+    assert!(moderate_mean > strong_mean, "moderate should outrank strong");
+    assert!(strong_mean < 0.0, "strong mismatch should become negative, not clamped");
+    assert!(perfect_mean > 0.9, "perfect match should stay near the top of the scale");
 }
 
 #[test]

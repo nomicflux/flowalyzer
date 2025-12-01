@@ -111,11 +111,9 @@ impl FeatureExtractor {
             for start in (start_offset..=(window.len() - frame_len)).step_by(hop) {
                 let frame = &window[start..start + frame_len];
                 let chunk_start = start as isize - (tail_len - hop as isize);
-                if chunk_start >= 0 {
-                    frame_starts.push(chunk_start);
-                    energy.push(frame_energy(frame));
-                    pitch.push(frame_pitch(frame, sample_rate));
-                }
+                frame_starts.push(chunk_start);
+                energy.push(frame_energy(frame));
+                pitch.push(frame_pitch(frame, sample_rate));
             }
         }
         ChunkFeatures {
@@ -174,9 +172,12 @@ fn frame_pitch(frame: &[f32], sample_rate: u32) -> f32 {
         }
     }
 
-    if best_lag > 0 {
+    let normalized_peak = best_corr / energy.max(1e-6);
+    let reliable = normalized_peak > 0.2; // require some periodicity above noise
+
+    if reliable && best_lag > 0 {
         sample_rate as f32 / best_lag as f32
     } else {
-        0.0 // No pitch detected
+        0.0 // No reliable pitch detected
     }
 }

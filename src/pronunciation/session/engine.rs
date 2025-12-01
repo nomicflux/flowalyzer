@@ -58,10 +58,8 @@ impl SessionEngine {
             phase_offset,
         );
 
-        // Calculate start_frame_idx based on the first extracted frame.
-        // Global pos of a frame starting at `chunk_start` (relative to chunk anchor defined in extract_chunk):
-        // G_pos = global_sample_counter + chunk_start - hop.
-        // See derivation in thought process.
+        // Calculate start_frame_idx based on the first extracted frame relative to the global window start.
+        // window_start_global = global_sample_counter - tail_len
         let start_frame_idx = if let Some(&first_start) = learner_features.frame_starts.first() {
             let global_pos = (self.global_sample_counter as i64 + first_start as i64 - hop as i64) as u64;
             (global_pos / hop as u64) as usize
